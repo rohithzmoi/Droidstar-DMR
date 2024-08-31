@@ -1,3 +1,22 @@
+
+/*
+	Original Copyright (C) 2019-2021 Doug McLain
+	Modification Copyright (C) 2024 Rohith Namboothiri
+
+	This program is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 3 of the License, or
+	(at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
@@ -15,18 +34,15 @@ int main(int argc, char *argv[])
     QQuickStyle::setStyle("Fusion");
     app.setWindowIcon(QIcon(":/images/droidstar.png"));
     
-    // Register DroidStar type if necessary
+    // Register DroidStar type
     qmlRegisterType<DroidStar>("org.dudetronics.droidstar", 1, 0, "DroidStar");
-   // qmlRegisterType<VUIDUpdater>("org.dudetronics.droidstar", 1, 0, "VUIDUpdater");
+  
     
   
     QQmlApplicationEngine engine;
     //VUIDUpdater *vuidUpdater = new VUIDUpdater();  // Create instance
     VUIDUpdater vuidUpdater;
-       // engine.rootContext()->setContextProperty("vuidUpdater", vuidUpdater); // Provide to QML
-    
-    
-    engine.rootContext()->setContextProperty("vuidUpdater", &vuidUpdater); // Provide to QML by passing a pointer
+     engine.rootContext()->setContextProperty("vuidUpdater", &vuidUpdater); // Provide to QML by passing a pointer
 
     // Register LogHandler class with QML
        LogHandler logHandler;
