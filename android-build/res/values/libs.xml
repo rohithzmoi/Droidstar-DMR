@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <!-- DO NOT EDIT THIS: This file is populated automatically by the deployment tool. -->
+
+    <array name="bundled_libs">
+        <item>arm64-v8a;crypto_3</item>
+        <item>arm64-v8a;ssl_3</item>
+    </array>
+
+    <array name="qt_libs">
+        <item>arm64-v8a;c++_shared</item>
+        <item>arm64-v8a;Qt6Core_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Gui_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Network_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Multimedia_arm64-v8a</item>
+        <item>arm64-v8a;Qt6OpenGL_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Qml_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Quick_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QmlModels_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickTemplates2_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2_arm64-v8a</item>
+        <item>arm64-v8a;Qt6SerialPort_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Svg_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QmlWorkerScript_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2Impl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2FusionStyleImpl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2Fusion_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2MaterialStyleImpl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2Material_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2ImagineStyleImpl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2Imagine_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2UniversalStyleImpl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2Universal_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2BasicStyleImpl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickControls2Basic_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickShapes_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickDialogs2Utils_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickDialogs2QuickImpl_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickDialogs2_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickLayouts_arm64-v8a</item>
+        <item>arm64-v8a;Qt6LabsFolderListModel_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickEffects_arm64-v8a</item>
+        <item>arm64-v8a;Qt6Test_arm64-v8a</item>
+        <item>arm64-v8a;Qt6QuickTest_arm64-v8a</item>
+        <item>arm64-v8a;Qt6MultimediaQuick_arm64-v8a</item>
+    </array>
+
+    <array name="load_local_libs">
+        <item>arm64-v8a;libplugins_platforms_qtforandroid_arm64-v8a.so:libplugins_multimedia_ffmpegmediaplugin_arm64-v8a.so:libplugins_multimedia_androidmediaplugin_arm64-v8a.so</item>
+    </array>
+
+    <string name="static_init_classes">org.qtproject.qt.android.multimedia.QtAudioDeviceManager:org.qtproject.qt.android.multimedia.QtMultimediaUtils</string>
+    <string name="use_local_qt_libs">1</string>
+    <string name="bundle_local_qt_libs">1</string>
+    <string name="system_libs_prefix"></string>
+</resources>
