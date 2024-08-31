@@ -28,16 +28,9 @@
 
 class DroidStar : public QObject
 {
-    Q_OBJECT
-    
-   
+    Q_OBJECT  
     //Q_PROPERTY(QString mode READ mode WRITE set_mode NOTIFY mode_changed)
    
-    
-
-
-    
-
    
 public:
     
@@ -52,36 +45,18 @@ public:
 
     Q_INVOKABLE  QString firstName() const { return m_firstName; }
    
-    
-    
-   //Q_INVOKABLE QString firstName() const; */
-    
-    
+     //Q_INVOKABLE QString firstName() const; */
     
 
     Q_INVOKABLE void addRecentTGID(const QString& tgid);
     Q_INVOKABLE QStringList loadRecentTGIDs() const;
     Q_INVOKABLE void clearRecentTGIDs();  // Add this line to make it invokable from QML
 
-    //void updateLabels(const QString &firstName);
-    
-   //void setFirstName(const QString &name);
    
-   // QString getFirstName() const;  // Declaration of the getter method
-    
-   // Q_INVOKABLE void displayFirstName(QString firstName);
-   // Q_INVOKABLE void updateFirstName(QString firstName);
   
-    
     
 signals:
 	void input_source_changed(int, QString);
-   // void firstNameChanged(const QString &firstName);
-    //void firstNameChanged(const QString &name);
-    
-    //void userNameChanged();
-   // void firstNameChanged();
-   // void firstNameReceived(const QString& firstName);
     void tgidsUpdated(const QStringList& newTgids);
     void recentTgidsUpdated(); // Optional signal if needed to notify QML
     //void firstNameReceived(const QString& firstName);  // Declare the signal here
@@ -119,12 +94,7 @@ signals:
     void update_devices();
     
 public slots:
-    //void updateUserName(const QString &name);
-    //void updateFirstName(const QString &name);
-    //void handleFirstNameChanged(const QString &name);
-   // void onFirstNameChanged(const QString &name);
-   // void updateFirstName(const QString &firstName);
-    //void setFirstName(const QString &name);
+   
     void set_callsign(const QString &callsign) {  m_callsign = callsign.simplified(); save_settings(); }
 	void set_dmrtgid(const QString &dmrtgid) { m_dmr_destid = dmrtgid.simplified().toUInt(); save_settings(); }
 	void set_slot(const int slot) {emit slot_changed(slot); }
@@ -316,22 +286,10 @@ public slots:
 private:
 	int connect_status;
 	bool m_update_host_files;
-    QStringList recentTGIDs; 
-    //QString m_userName;
-    QObject *m_mainTab;
-    
-    //VUIDUpdater *vuidUpdater;
-    
-    //QNetworkAccessManager *networkManager;
-       // QTimer debounceTimer;
-      //  uint32_t lastSrcId = 0;  // To keep track of the last source ID requested
-    unsigned int lastSrcId;
-    
-    //DMR *dmr;
-   // DMR* dmr;
-   // SignalEmitter *signalEmitter;
-   // QString m_firstName;
-	QSettings *m_settings;
+    	QStringList recentTGIDs; 
+ 	QObject *m_mainTab;
+    	unsigned int lastSrcId;
+        QSettings *m_settings;
 	QString config_path;
 	QString hosts_filename;
 	QString m_callsign;
