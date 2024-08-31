@@ -2,6 +2,8 @@
 
 This project is a modified version of the [original Droidstar App](https://github.com/doug-mclain/droidstar) by Doug McLain. The modifications introduce new features and enhancements to improve user experience and functionality.
 
+This project uses QT 6.7.2
+
 ## New Features
 
 I am excited to announce the release of several new features and improvements:
