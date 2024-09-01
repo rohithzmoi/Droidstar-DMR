@@ -1,6 +1,6 @@
 /*
 	Original Copyright (C) 2019-2021 Doug McLain
-    Modification Copyright (C) 2024 Rohith Namboothiri
+    	Modification Copyright (C) 2024 Rohith Namboothiri
 
 	This program is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -21,18 +21,12 @@ import QtQuick
 import QtQuick.Controls
 import org.dudetronics.droidstar
 
-
-
-
-
 Item {
     id: mainTab
     width: 400
     height: 600
     
-
-
-    //property int rows: USE_FLITE ? 20 : 18
+	//property int rows: USE_FLITE ? 20 : 18
     //property bool tts: USE_FLITE
 
 
@@ -83,13 +77,12 @@ property int rows: {
 
     // Connections to handle signals from QsoTab.qml
     Connections {
-        target: qsoTab  // Assuming qsoTab is an instance of QsoTab somewhere higher in the hierarchy
+        target: qsoTab 
         onFirstRowDataChanged: updateFirstRowData(serialNumber, callsign, handle, country)
         onSecondRowDataChanged: updateSecondRowData(serialNumber, callsign, handle, country)
     }
   
 
-    // Define the ListModel within the scope of the Item
     ListModel {
         id: recentTgidsModel
     }
@@ -110,7 +103,7 @@ property int rows: {
 
 function clearRecentTgids() {
         recentTgidsModel.clear();
-        droidstar.clearRecentTGIDs(); // Call the C++ function to clear persistent storage
+        droidstar.clearRecentTGIDs(); 
     }
 
     Connections {
@@ -120,28 +113,6 @@ function clearRecentTgids() {
 
     Component.onCompleted: updateRecentTgidsModel()
 
-
-
-/*
-function fetchFirstName() {
-    console.log("Fetching first name based on data1 change");
-    var fetchedName = vuidUpdater.mfirstName; // Fetch the first name using the property
-    vuidUpdater.msetFirstName(fetchedName); // Update the first name
-}
-
-function updateFirstNameText(name) {
-    firstNameText.text = name;
-    console.log("Text changed to:", name);
-}
-
-// Connections for VUIDUpdater
-Connections {
-    target: vuidUpdater
-    function onMfirstNameChanged(name) {
-        console.log("QML First name updated to:", name);
-        updateFirstNameText(name);
-    }
-} */
 
 
 // Function to update the full name with country
@@ -192,7 +163,7 @@ function updateFullNameText() {
     property alias label4: _label4
     property alias label5: _label5
     property alias label6: _label6
-   // property alias ambestatus: _ambestatus
+    // property alias ambestatus: _ambestatus
     //property alias mmdvmstatus: _mmdvmstatus
     property alias netstatus: _netstatus
     property alias levelMeter: _levelMeter
@@ -222,13 +193,6 @@ function updateFullNameText() {
     property alias swtxBox: _swtxBox
     property alias swrxBox: _swrxBox
     property alias agcBox: _agcBox
-  
-
- 
-
-
-
-
 
 // UI Components
 Text {
@@ -265,7 +229,6 @@ contentItem: Text {
     // Override the popup for the ComboBox
     popup: Popup {
         width: parent.width
-        //height: 50 // Adjust height as needed
 
         Column {
             width: parent.width
@@ -282,7 +245,6 @@ contentItem: Text {
                         height: parent.height
                         verticalAlignment: Text.AlignVCenter
                         color: "white" // Set the text color to white
-                        // Add a MouseArea to make the Text item clickable
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
@@ -309,13 +271,9 @@ contentItem: Text {
 
     onActivated: {
         _dmrtgidEdit.text = currentText; // Set the selected TGID to the TextField
-        //console.log("droidstar.tgid_text_changed called from onActivated with TGID:", currentText); // Log event
-//droidstar.tgid_text_changed(currentText);  // Notify backend of TGID change
   
     }
 }
-
-
 
     Timer {
         id: _uitimer
@@ -783,14 +741,11 @@ Text {
         color: "white"
         //text:  vuidUpdater.fetchedFirstName
         text: vuidUpdater.fetchedFirstName + (vuidUpdater.fetchedCountry !== "" ? " (" + vuidUpdater.fetchedCountry + ")" : "")
-        wrapMode: Text.WordWrap // This enables word wrapping
+        wrapMode: Text.WordWrap
         font.pixelSize: parent.height / 30
         onTextChanged:  { console.log("Text changed to:", text);
     }
 }
-
-
-
 
     Text {
         id: _label2
@@ -912,9 +867,6 @@ Text {
     }
 }
 
-
-
-
 Connections {
     target: vuidUpdater
     function onFetchedFirstNameChanged(name) {
@@ -927,29 +879,6 @@ Connections {
         updateFullNameText(); // Function to update the full text
     }
 }
-
-
-
-
-
-/*
-// Function to update the full name with country
-function updateFullNameText() {
-    firstNameText1.text = vuidUpdater.fetchedFirstName + " (" + vuidUpdater.fetchedCountry + ")";
-} */
-
-
-
-
-/*
-Connections {
-        target: vuidUpdater
-        function onFetchedFirstNameChanged(name) {
-            console.log("Fetched first name updated to:", name);
-            firstNameText1.text = name; // Explicitly set the text
-        }
-    }
-*/
 
     Text {
         id: _data3
@@ -1168,9 +1097,6 @@ Connections {
         }
     }
 
-
-
-
 property string dmrID: _data2.text
 property string tgid: _data3.text  // Assuming _data3 contains the TGID
 
@@ -1178,7 +1104,7 @@ signal dataUpdated(var receivedDmrID, var receivedTGID)
 
 Timer {
     id: updateTimer
-    interval: 500  // Delay in ms, adjust as needed for your case
+    interval: 500
     repeat: false
     onTriggered: {
         if (dmrID && tgid) {
@@ -1289,8 +1215,7 @@ Button {
         if (!settingsTab.toggleTX.checked) {
             tx = false;
             droidstar.release_tx();
-        }
-    }
-}
-
+       }
+     }
+  }
 }
