@@ -1,6 +1,6 @@
 # Modified DROIDSTAR DMR App for iOS & Android
 
-This project is a modified version of the [original Droidstar App](https://github.com/doug-mclain/droidstar) by Doug McLain. The modifications introduce new features and enhancements to improve user experience and functionality.
+This project is a modified version of the [original Droidstar App](https://github.com/nostar/DroidStar) by Doug McLain. The modifications introduce new features and enhancements to improve user experience and functionality.
 
 This project uses QT 6.7.2
 
@@ -37,7 +37,7 @@ Please let me know if these features are working correctly on your device. If yo
 
 ## Acknowledgments
 
-This project is based on the original work by [Doug McLain](https://github.com/doug-mclain). Many thanks to Doug for his excellent foundation and contributions to the digital radio community.
+This project is based on the original work by [Doug McLain](https://github.com/nostar/). Many thanks to Doug for his excellent foundation and contributions to the digital radio community.
 
 ## License
 
