@@ -20,7 +20,7 @@ I am excited to announce the release of several new features and improvements:
 
 - **Quick Access Buttons**: Added a button in the QSO entries that opens a menu to visit the station's QRZ, BM, and APRS pages directly from the app.
 
-- **Background Functionality for Android Users**: The app now supports background operation for Android users, allowing it to continue running while switching between applications. This feature is particularly useful for tasks like checking a station's QRZ page while maintaining uninterrupted RX.
+- **Background Functionality for Android & iOS Users**: The app now supports background operation for Android & iOS users, allowing it to continue running while switching between applications. This feature is particularly useful for tasks like checking a station's QRZ page while maintaining uninterrupted RX. iOS users will now be able to connect to Bluetooth devices as well.
 
 - **Simplified User Interface**: The user interface has been simplified by replacing the text "Main" with a "Home" icon for a more intuitive experience.
 
