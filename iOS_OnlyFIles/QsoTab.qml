@@ -1,3 +1,21 @@
+/*
+    
+    Copyright (C) 2024 Rohith Namboothiri
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Dialogs
@@ -7,15 +25,15 @@ Item {
     width: 400
     height: 600
 
-    property MainTab mainTab: null  // This is correctly set from main.qml
+    property MainTab mainTab: null  
     property int dmrID: -1
     property int tgid: -1
     property string logFileName: "logs.json"
     property string savedFilePath: ""
-    //property int latestSerialNumber: 0  // Track the latest serial number
+    //property int latestSerialNumber: 0 
     property int latestSerialNumber: 1
 
-    // Signals to update MainTab
+   
     signal firstRowDataChanged(string serialNumber, string callsign, string handle, string country)
     signal secondRowDataChanged(string serialNumber, string callsign, string handle, string country)
 
@@ -23,7 +41,7 @@ Item {
         id: logModel
     }
 
-    // Update the first and second row data in a single function
+   
     function updateRowData() {
         if (logModel.count > 0) {
             var firstRow = logModel.get(0);
@@ -40,7 +58,7 @@ Item {
         }
     }
 
-    // Connections to update row data whenever the model changes
+  
    Connections {
     target: logModel
     onCountChanged: {
@@ -49,7 +67,7 @@ Item {
     }
 }
 
-    // Component onCompleted: Initial setup
+    
     Component.onCompleted: {
         mainTab.dataUpdated.connect(onDataUpdated);
         updateRowData(); // Ensure both rows are updated initially
@@ -75,10 +93,6 @@ Item {
         latestSerialNumber = Math.max(latestSerialNumber, savedData[i].serialNumber + 1);
     }
 }
-
-
-
-
 
     function clearSettings() {
         logModel.clear();
@@ -128,7 +142,6 @@ Item {
         }
     }
 
-    // Add an Export button
     Button {
         id: exportButton
         text: "Export Log"
@@ -151,14 +164,13 @@ Item {
         }
     }
 
-    // Clone the button using properties from mainTab's buttonTX
     Button {
     id: clonedButton
     visible: mainTab.buttonTX.visible
     enabled: mainTab.buttonTX.enabled
     x: exportButton.x + exportButton.width + 10
     y: exportButton.y
-    width: exportButton.width * 1.5  // Increase width to accommodate more text
+    width: exportButton.width * 1.5 
     height: exportButton.height
     background: Rectangle {
         color: mainTab.buttonTX.tx ? "#800000" : "steelblue"
@@ -166,12 +178,12 @@ Item {
 
         Column {
             anchors.centerIn: parent
-            spacing: 2  // Add some spacing between the texts
+            spacing: 2 
 
             Text {
                 id: clonedText
-                font.pointSize: 20  // Adjust font size as needed
-                text: qsTr("TX")  // Display "TX"
+                font.pointSize: 20 
+                text: qsTr("TX") 
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
@@ -566,7 +578,7 @@ TableView {
 
        
         
-        // Insert the new entry with the next serial number
+
         logModel.insert(0, {
             serialNumber: latestSerialNumber,
             callsign: data.callsign,
@@ -577,7 +589,7 @@ TableView {
             currentTime: data.currentTime,
             checked: false
         });
-        //latestSerialNumber += 1; // Increment for the next entry
+       
 
         // Save the updated log
         saveSettings();
