@@ -547,9 +547,11 @@ ApplicationWindow {
 				mainTab.data5.text = "";
 				mainTab.data6.text = "";
 				mainTab.netstatus.text = "Not connected";
+				mainTab.sliderMicGain.enabled = true;
             }
 			if(c === 1){
 				mainTab.connectbutton.text = "Connecting";
+				mainTab.sliderMicGain.enabled = false;
 				mainTab.comboMode.enabled = false;
 				mainTab.comboHost.enabled = false;
 				if(mainTab.comboMode.currentText != "REF"){
@@ -558,6 +560,7 @@ ApplicationWindow {
             }
 			if(c === 2){
 				mainTab.connectbutton.text = "Disconnect";
+				mainTab.sliderMicGain.enabled = true;
 				mainTab.comboMode.enabled = false;
 				mainTab.comboHost.enabled = false;
 				//droidstar.fetchFirstNameFromDMR(); // Fetch first name API
