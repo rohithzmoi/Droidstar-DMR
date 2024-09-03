@@ -1,6 +1,7 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
     Modified Copyright (C) 2024 Rohith Namboothiri
+    
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -372,29 +373,39 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
 
 void AudioEngine::handleStateChanged(QAudio::State newState)
 {
+    static bool isSessionActive = false; 
+
     switch (newState) {
     case QAudio::ActiveState:
         qDebug() << "AudioOut state active";
-            setupAVAudioSession();
-            
-            
+        if (!isSessionActive) {
+            setupAVAudioSession(); 
+            isSessionActive = true; 
+        }
         break;
+        
     case QAudio::SuspendedState:
         qDebug() << "AudioOut state suspended";
-            //setupBackgroundAudio();
-            
+        if (isSessionActive) {
+            deactivateAVAudioSession();
+            isSessionActive = false; 
+        }
         break;
+
     case QAudio::IdleState:
         qDebug() << "AudioOut state idle";
-            setupBackgroundAudio();
-            
+        setupBackgroundAudio();
         break;
+
     case QAudio::StoppedState:
         qDebug() << "AudioOut state stopped";
-            
+        if (isSessionActive) {
+            deactivateAVAudioSession();
+            isSessionActive = false; 
+        }
         break;
+
     default:
-            
         break;
     }
 }
