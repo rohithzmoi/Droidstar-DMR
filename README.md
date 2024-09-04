@@ -49,4 +49,19 @@ If you would like to support the development of the iOS TestFlight or public rel
 
 ---
 
-73 VU3LVO - Rohith
+**73 VU3LVO - Rohith**
+
+---
+
+## 🌟 Contributors
+
+I deeply appreciate the incredible efforts and dedication of our contributors who have played a vital role in enhancing this project. Your passion and commitment drive me forward, and I am honored to have you as a part of our journey. Thank you for being an essential part of this project! 🚀
+
+### Special Thanks To:
+
+- **@TXDMR** • [Reddit](https://www.reddit.com/user/TXDMR)
+
+---
+
+Want to see your name here? Contribute today and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
+
