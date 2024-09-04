@@ -60,6 +60,7 @@ I deeply appreciate the incredible efforts and dedication of our contributors wh
 ### Special Thanks To:
 
 - **@TXDMR** • [Reddit](https://www.reddit.com/user/TXDMR)
+- **@Impossible_Duty_8935** • [Reddit](https://www.reddit.com/user/Impossible_Duty_8935)
 
 ---
 
