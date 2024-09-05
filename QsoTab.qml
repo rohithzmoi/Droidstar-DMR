@@ -282,7 +282,27 @@ Item {
     }
 
     // Error Dialog to show if file name is empty
-    Dialog {
+   
+// Error Dialog to show if file name is empty
+Dialog {
+    id: errorDialog
+    title: "Error"
+    standardButtons: Dialog.Ok
+    modal: true
+    width: 300 
+
+    contentItem: Text {
+        text: "Empty/Invalid File Name."
+        wrapMode: Text.WordWrap
+        color: "red"
+        width: parent.width * 0.9 
+    }
+}
+
+
+/* 
+//Binding loop Error
+Dialog {
         id: errorDialog
         title: "Error"
         standardButtons: Dialog.Ok
@@ -295,7 +315,7 @@ Item {
             width: parent.width * 0.9
         }
     }
-
+*/
 
     // Dialog to show that the file was saved
     Dialog {
