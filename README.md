@@ -48,7 +48,7 @@ This project, including modifications, is licensed under the GNU General Public 
 
 ## Support
 
-If you would like to support the development of the iOS TestFlight or public release, you can **[buy me a coffee](https://buymeacoffee.com/rohithz)**.
+If you would like to support the development of the Droidstar DMR iOS TestFlight or public release, you can **[buy me a coffee](https://buymeacoffee.com/rohithz)**.
 
 ---
 
@@ -71,6 +71,8 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **N2HT**
 - **steff6272**
 - **Mark Flett**
+- **Marco KC2ZMA**
+- **Ray**
 
 ---
 
