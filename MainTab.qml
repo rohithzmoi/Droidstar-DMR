@@ -1,19 +1,19 @@
 /*
-	Original Copyright (C) 2019-2021 Doug McLain
-    	Modification Copyright (C) 2024 Rohith Namboothiri
+    Copyright (C) 2019-2021 Doug McLain
+    Modified Copyright (C) 2024 Rohith Namboothiri
 
-	This program is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
 
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 
@@ -21,12 +21,15 @@ import QtQuick
 import QtQuick.Controls
 import org.dudetronics.droidstar
 
+
 Item {
     id: mainTab
     width: 400
     height: 600
     
-	//property int rows: USE_FLITE ? 20 : 18
+
+
+    //property int rows: USE_FLITE ? 20 : 18
     //property bool tts: USE_FLITE
 
 
@@ -47,42 +50,38 @@ property int rows: {
         }
     }
 
-    // Properties to hold first row data
-    property string firstRowSerialNumber: "N/A"
-    property string firstRowCallsign: "N/A"
-    property string firstRowHandle: "N/A"
-    property string firstRowCountry: "N/A"
+property string firstRowSerialNumber: "N/A"
+property string firstRowCallsign: "N/A"
+property string firstRowHandle: "N/A"
+property string firstRowCountry: "N/A"
+property string secondRowSerialNumber: "N/A"
+property string secondRowCallsign: "N/A"
+property string secondRowHandle: "N/A"
+property string secondRowCountry: "N/A"
 
-    // Properties to hold second row data
-    property string secondRowSerialNumber: "N/A"
-    property string secondRowCallsign: "N/A"
-    property string secondRowHandle: "N/A"
-    property string secondRowCountry: "N/A"
+function updateFirstRowData(serialNumber, callsign, handle, country) {
+    firstRowSerialNumber = serialNumber;
+    firstRowCallsign = callsign;
+    firstRowHandle = handle;
+    firstRowCountry = country;
+}
 
-    // Slot to update the first row data when the signal is received from QsoTab
-    function updateFirstRowData(serialNumber, callsign, handle, country) {
-        firstRowSerialNumber = serialNumber;
-        firstRowCallsign = callsign;
-        firstRowHandle = handle;
-        firstRowCountry = country;
-    }
 
-    // Slot to update the second row data when the signal is received from QsoTab
-    function updateSecondRowData(serialNumber, callsign, handle, country) {
-        secondRowSerialNumber = serialNumber;
-        secondRowCallsign = callsign;
-        secondRowHandle = handle;
-        secondRowCountry = country;
-    }
+function updateSecondRowData(serialNumber, callsign, handle, country) {
+    secondRowSerialNumber = serialNumber;
+    secondRowCallsign = callsign;
+    secondRowHandle = handle;
+    secondRowCountry = country;
+}
 
-    // Connections to handle signals from QsoTab.qml
-    Connections {
-        target: qsoTab 
-        onFirstRowDataChanged: updateFirstRowData(serialNumber, callsign, handle, country)
-        onSecondRowDataChanged: updateSecondRowData(serialNumber, callsign, handle, country)
-    }
-  
 
+Connections {
+    target: qsoTab  // Assuming qsoTab is an instance of QsoTab somewhere higher in the hierarchy
+    onFirstRowDataChanged: updateFirstRowData(serialNumber, callsign, handle, country)
+    onSecondRowDataChanged: updateSecondRowData(serialNumber, callsign, handle, country)
+}
+
+    // Define the ListModel
     ListModel {
         id: recentTgidsModel
     }
@@ -103,7 +102,7 @@ property int rows: {
 
 function clearRecentTgids() {
         recentTgidsModel.clear();
-        droidstar.clearRecentTGIDs(); 
+        droidstar.clearRecentTGIDs(); // Call the C++ function to clear persistent storage
     }
 
     Connections {
@@ -112,7 +111,6 @@ function clearRecentTgids() {
     }
 
     Component.onCompleted: updateRecentTgidsModel()
-
 
 
 // Function to update the full name with country
@@ -163,7 +161,7 @@ function updateFullNameText() {
     property alias label4: _label4
     property alias label5: _label5
     property alias label6: _label6
-    // property alias ambestatus: _ambestatus
+    //property alias ambestatus: _ambestatus
     //property alias mmdvmstatus: _mmdvmstatus
     property alias netstatus: _netstatus
     property alias levelMeter: _levelMeter
@@ -193,7 +191,12 @@ function updateFullNameText() {
     property alias swtxBox: _swtxBox
     property alias swrxBox: _swrxBox
     property alias agcBox: _agcBox
-
+    property alias recentTgLabel: recentTgLabel
+    property alias recentTgidsComboBox: recentTgidsComboBox
+    property alias lastHeard: lastHeard
+    property alias firstRowData: firstRowData
+    property alias secondRowData: secondRowData
+   
 // UI Components
 Text {
     id: recentTgLabel
@@ -206,6 +209,8 @@ Text {
     height: parent.height / rows
     verticalAlignment: Text.AlignVCenter
     visible: true
+    
+
 }
 
 ComboBox {
@@ -229,6 +234,7 @@ contentItem: Text {
     // Override the popup for the ComboBox
     popup: Popup {
         width: parent.width
+        //height: 50 // Adjust height as needed
 
         Column {
             width: parent.width
@@ -271,9 +277,13 @@ contentItem: Text {
 
     onActivated: {
         _dmrtgidEdit.text = currentText; // Set the selected TGID to the TextField
+        //console.log("droidstar.tgid_text_changed called from onActivated with TGID:", currentText); // Log event
+//droidstar.tgid_text_changed(currentText);  // Notify backend of TGID change
   
     }
 }
+
+
 
     Timer {
         id: _uitimer
@@ -551,7 +561,7 @@ contentItem: Text {
     Text {
         id: _dtmflabel
         x: 5
-        y: (parent.height / rows + 1) * 4
+        y: (parent.height / rows + 1) * 3
         width: parent.width / 5
         height: parent.height / rows
         text: qsTr("DTMF")
@@ -563,7 +573,7 @@ contentItem: Text {
     TextField {
         id: _editIAXDTMF
         x: parent.width / 4
-        y: (parent.height / rows + 1) * 4
+        y: (parent.height / rows + 1) * 3
         width: (parent.width * 3 / 8) - 4
         height: parent.height / rows
         font.pixelSize: parent.height / 35
@@ -573,7 +583,7 @@ contentItem: Text {
     Button {
         id: _dtmfsendbutton
         x: (parent.width * 5 / 8)
-        y: (parent.height / rows + 1) * 4
+        y: (parent.height / rows + 1) * 3
         width: (parent.width * 3 / 8) - 5
         height: parent.height / rows
         text: qsTr("Send")
@@ -711,7 +721,7 @@ contentItem: Text {
         height: parent.height / rows
         text: qsTr("MYCALL")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
 
@@ -727,7 +737,7 @@ Text {
         
         text: qsTr("Handle")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
 
@@ -741,11 +751,14 @@ Text {
         color: "white"
         //text:  vuidUpdater.fetchedFirstName
         text: vuidUpdater.fetchedFirstName + (vuidUpdater.fetchedCountry !== "" ? " (" + vuidUpdater.fetchedCountry + ")" : "")
-        wrapMode: Text.WordWrap
-        font.pixelSize: parent.height / 30
+        wrapMode: Text.WordWrap // This enables word wrapping
+        font.pixelSize: parent.height / 40
         onTextChanged:  { console.log("Text changed to:", text);
     }
 }
+
+
+
 
     Text {
         id: _label2
@@ -755,7 +768,7 @@ Text {
         height: parent.height / rows
         text: qsTr("URCALL")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -766,7 +779,7 @@ Text {
         height: parent.height / rows
         text: qsTr("RPTR1")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -777,7 +790,7 @@ Text {
         height: parent.height / rows
         text: qsTr("RPTR2")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -788,7 +801,7 @@ Text {
         height: parent.height / rows
         text: qsTr("StrmID")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -799,7 +812,7 @@ Text {
         height: parent.height / rows
         text: qsTr("Text")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
     Text {
         id: _label7
@@ -809,7 +822,7 @@ Text {
         height: parent.height / rows
         text: qsTr("")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 Text {
     id: _data1
@@ -819,7 +832,7 @@ Text {
     height: parent.height / rows
     text: qsTr("")
     color: "white"
-    font.pixelSize: parent.height / 30
+    font.pixelSize: parent.height / 40
    
 }
 
@@ -831,11 +844,11 @@ Text {
     height: parent.height / rows
     text: qsTr("")
     color: "white"
-    font.pixelSize: parent.height / 30
+    font.pixelSize: parent.height / 40
 
     Timer {
         id: stabilityTimer
-        interval: 200  // 500 milliseconds to verify text stability
+        interval: 200  // 200 milliseconds to verify text stability
         repeat: false
         onTriggered: {
             if (_data2.text !== "") {
@@ -849,12 +862,12 @@ Text {
                     console.log("Invalid data input, not a number:", _data2.text);
                 }
             } else {
-                console.log("Data2 became empty before 500ms elapsed.");
+                console.log("Data2 became empty before 100ms elapsed.");
             }
         }
     }
 
-    onTextChanged: {
+        onTextChanged: {
         console.log("Data2 changed, new value:", text);
 
         if (text === "") {
@@ -862,10 +875,20 @@ Text {
             return;  // Exit after starting the timer for empty input
         }
 
+        console.log("Restarting stabilityTimer due to change in Data2");
         // Reset and start the stability timer whenever text changes
         stabilityTimer.restart();
     }
 }
+
+
+
+
+
+
+
+
+
 
 Connections {
     target: vuidUpdater
@@ -880,6 +903,29 @@ Connections {
     }
 }
 
+
+
+
+
+/*
+// Function to update the full name with country
+function updateFullNameText() {
+    firstNameText1.text = vuidUpdater.fetchedFirstName + " (" + vuidUpdater.fetchedCountry + ")";
+} */
+
+
+
+
+/*
+Connections {
+        target: vuidUpdater
+        function onFetchedFirstNameChanged(name) {
+            console.log("Fetched first name updated to:", name);
+            firstNameText1.text = name; // Explicitly set the text
+        }
+    }
+*/
+
     Text {
         id: _data3
         x: parent.width / 3
@@ -888,7 +934,7 @@ Connections {
         height: parent.height / rows
         text: qsTr("")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -899,7 +945,7 @@ Connections {
         height: parent.height / rows
         text: qsTr("")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -910,7 +956,7 @@ Connections {
         height: parent.height / rows
         text: qsTr("")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
     Text {
@@ -921,7 +967,7 @@ Connections {
         height: parent.height / rows
         text: qsTr("")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
     Text {
         id: _data7
@@ -931,77 +977,79 @@ Connections {
         height: parent.height / rows
         text: qsTr("")
         color: "white"
-        font.pixelSize: parent.height / 30
+        font.pixelSize: parent.height / 40
     }
 
-    /* Text {
-            id: _ambestatus
-            x: 10
-            y: _data7.y + _data7.height - 40
-            width: parent.width - 30
-            height: parent.height / rows
-            text: qsTr("No AMBE hardware connected")
-            color: "white"
-            font.pixelSize: parent.height / 35
-        }
-        Text {
-            id: _mmdvmstatus
-            x: 10
-            y: _ambestatus.y + _ambestatus.height
-            width: parent.width - 40
-            height: parent.height / rows
-            text: qsTr("No MMDVM connected")
-            color: "white"
-            font.pixelSize: parent.height / 35
-        }*/
-
-       // Text elements to display the last heard data
-    Text {
-        id: lastHeard
+   /* Text {
+        id: _ambestatus
         x: 10
-        y: _data7.y + _data7.height - 80
+        y: _data7.y + _data7.height - 40
+        width: parent.width - 30
+        height: parent.height / rows
+        text: qsTr("No AMBE hardware connected")
+        color: "white"
+        font.pixelSize: parent.height / 45
+    }
+    Text {
+        id: _mmdvmstatus
+        x: 10
+        y: _ambestatus.y + _ambestatus.height
         width: parent.width - 40
         height: parent.height / rows
-        text: qsTr("Last Heard")
+        text: qsTr("No MMDVM connected")
         color: "white"
         font.pixelSize: parent.height / 35
-    }
+    }*/
 
-    // Text element to display first row data
-    Text {
-        id: firstRowData
-        x: 10
-        y: lastHeard.y + lastHeard.height
-        width: parent.width - 40
-        height: parent.height / rows
-        text: (firstRowSerialNumber !== "N/A" ? firstRowSerialNumber + ". " : "") +
-              (firstRowCallsign !== "N/A" ? firstRowCallsign : "") +
-              (firstRowHandle !== "N/A" && firstRowCallsign !== "N/A" ? " - " : "") +
-              (firstRowHandle !== "N/A" ? firstRowHandle : "") +
-              (firstRowCountry !== "N/A" && (firstRowCallsign !== "N/A" || firstRowHandle !== "N/A") ? " - " : "") +
-              (firstRowCountry !== "N/A" ? firstRowCountry : "")
-        color: "white"
-        font.pixelSize: parent.height / 35
-        wrapMode: Text.WordWrap
-    }
+   // Text elements to display the last heard data
+Text {
+    id: lastHeard
+    x: 10
+    y: _data7.y + _data7.height - 80
+    width: parent.width - 40
+    height: parent.height / rows
+    text: qsTr("Last Heard")
+    color: "white"
+    font.pixelSize: parent.height / 35
+}
 
-    // Text element to display second row data
-    Text {
-        id: secondRowData
-        x: 10
-        y: firstRowData.y + firstRowData.height
-        width: parent.width - 40
-        height: parent.height / rows
-        text: (secondRowSerialNumber !== "N/A" ? secondRowSerialNumber + ". " : "") +
-              (secondRowCallsign !== "N/A" ? secondRowCallsign : "") +
-              (secondRowHandle !== "N/A" && secondRowCallsign !== "N/A" ? " - " : "") +
-              (secondRowHandle !== "N/A" ? secondRowHandle : "") +
-              (secondRowCountry !== "N/A" && (secondRowCallsign !== "N/A" || secondRowHandle !== "N/A") ? " - " : "") +
-              (secondRowCountry !== "N/A" ? secondRowCountry : "")
-        color: "white"
-        font.pixelSize: parent.height / 35
-        wrapMode: Text.WordWrap
-    }
+// Text element to display first row data
+Text {
+    id: firstRowData
+    x: 10
+    y: lastHeard.y + lastHeard.height
+    width: parent.width - 40
+    height: parent.height / rows
+    text: (firstRowSerialNumber !== "N/A" ? firstRowSerialNumber + ". " : "") +
+          (firstRowCallsign !== "N/A" ? firstRowCallsign : "") +
+          (firstRowHandle !== "N/A" && firstRowCallsign !== "N/A" ? " - " : "") + 
+          (firstRowHandle !== "N/A" ? firstRowHandle : "") + 
+          (firstRowCountry !== "N/A" && (firstRowCallsign !== "N/A" || firstRowHandle !== "N/A") ? " - " : "") +
+          (firstRowCountry !== "N/A" ? firstRowCountry : "")
+    color: "white"
+    font.pixelSize: parent.height / 45
+    wrapMode: Text.WordWrap
+}
+
+// Text element to display second row data
+Text {
+    id: secondRowData
+    x: 10
+    y: firstRowData.y + firstRowData.height
+    width: parent.width - 40
+    height: parent.height / rows
+    text: (secondRowSerialNumber !== "N/A" ? secondRowSerialNumber + ". " : "") +
+          (secondRowCallsign !== "N/A" ? secondRowCallsign : "") +
+          (secondRowHandle !== "N/A" && secondRowCallsign !== "N/A" ? " - " : "") + 
+          (secondRowHandle !== "N/A" ? secondRowHandle : "") + 
+          (secondRowCountry !== "N/A" && (secondRowCallsign !== "N/A" || secondRowHandle !== "N/A") ? " - " : "") +
+          (secondRowCountry !== "N/A" ? secondRowCountry : "")
+    color: "white"
+    font.pixelSize: parent.height / 45
+    wrapMode: Text.WordWrap
+}
+
+
    /* Text {
         id: _netstatus
         x: 10
@@ -1011,7 +1059,7 @@ Connections {
         text: qsTr("Not Connected to network")
         color: "white"
         font.pixelSize: parent.height / 35
-    } */
+    }*/
     Rectangle {
         x: 10
         y: (parent.height / rows + 1.1) * 14.2
@@ -1097,6 +1145,9 @@ Connections {
         }
     }
 
+
+
+
 property string dmrID: _data2.text
 property string tgid: _data3.text  // Assuming _data3 contains the TGID
 
@@ -1104,7 +1155,7 @@ signal dataUpdated(var receivedDmrID, var receivedTGID)
 
 Timer {
     id: updateTimer
-    interval: 500
+    interval: 500  // Delay in ms, adjust as needed for your case
     repeat: false
     onTriggered: {
         if (dmrID && tgid) {
@@ -1117,16 +1168,17 @@ Timer {
 }
 
 function emitDataUpdated() {
-    updateTimer.restart();  // Start or restart the timer whenever dmrID changes
+    updateTimer.restart();  
 }
 
 onDmrIDChanged: {
     console.log("DMR ID changed, restarting update timer.");
-    emitDataUpdated();  // Trigger the timer only when dmrID changes
+    emitDataUpdated();  
 }
 
 
-Button {
+
+    Button {
     Timer {
         id: _txtimer
         repeat: true
@@ -1151,7 +1203,7 @@ Button {
         color: _buttonTX.tx ? "#800000" : "steelblue"
         radius: 10
 
-        // Vertical layout for both texts
+       
         Column {
             anchors.centerIn: parent
             spacing: 5
@@ -1159,7 +1211,7 @@ Button {
 
             Text {
                 id: _btntxt
-                font.pointSize: 20  // Slightly bigger font size for TX text
+                font.pointSize: 20 
                 text: qsTr("TX")
                 color: "white"
                 horizontalAlignment: Text.AlignHCenter
@@ -1215,7 +1267,7 @@ Button {
         if (!settingsTab.toggleTX.checked) {
             tx = false;
             droidstar.release_tx();
-       }
-     }
-  }
+        }
+    }
+}
 }
