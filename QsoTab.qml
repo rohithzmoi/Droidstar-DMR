@@ -1,4 +1,5 @@
 /*
+
     Copyright (C) 2024 Rohith Namboothiri
 
     This program is free software: you can redistribute it and/or modify
@@ -8,14 +9,12 @@
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with this program. If not, see <https://www.gnu.org/licenses/>.
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
-
-
 
 import QtQuick 2.15
 import QtQuick.Controls 2.15
@@ -26,14 +25,16 @@ Item {
     width: 400
     height: 600
 
- property MainTab mainTab: null  // This is correctly set from main.qml
+ property MainTab mainTab: null
     property int dmrID: -1
     property int tgid: -1
     property string logFileName: "logs.json"
     property string savedFilePath: ""
-    property int latestSerialNumber: 1
+    property int latestSerialNumber: 0
+    property bool isLoading: true
 
-    // Signals to update MainTab
+
+
        signal firstRowDataChanged(string serialNumber, string callsign, string handle, string country)
        signal secondRowDataChanged(string serialNumber, string callsign, string handle, string country)
 
@@ -48,14 +49,14 @@ Item {
                var firstRow = logModel.get(0);
                firstRowDataChanged(firstRow.serialNumber, firstRow.callsign, firstRow.fname, firstRow.country);
            } else {
-               firstRowDataChanged("0", "N/A", "N/A", "N/A");
+               firstRowDataChanged("N/A", "N/A", "N/A", "N/A");
            }
 
            if (logModel.count > 1) {
                var secondRow = logModel.get(1);
                secondRowDataChanged(secondRow.serialNumber, secondRow.callsign, secondRow.fname, secondRow.country);
            } else {
-               secondRowDataChanged("0", "N/A", "N/A", "N/A");
+               secondRowDataChanged("N/A", "N/A", "N/A", "N/A");
            }
        }
 
@@ -64,15 +65,12 @@ Item {
        target: logModel
        onCountChanged: {
            updateRowData();
-           saveSettings(); // Save logs when the model changes
        }
    }
 
-
-      // Component onCompleted: Initial setup
           Component.onCompleted: {
               mainTab.dataUpdated.connect(onDataUpdated);
-              updateRowData(); // Ensure both rows are updated initially
+              updateRowData();
               loadSettings();
               if (mainTab === null) {
                   console.error("mainTab is null. Ensure it is passed correctly from the parent.");
@@ -89,12 +87,15 @@ Item {
            }
 
           function loadSettings() {
+              isLoading = true;
            var savedData = logHandler.loadLog(logFileName);
            for (var i = 0; i < savedData.length; i++) {
                savedData[i].checked = false;
                logModel.append(savedData[i]);
                latestSerialNumber = Math.max(latestSerialNumber, savedData[i].serialNumber + 1);
+              
            }
+           isLoading = false;
        }
 
     function clearSettings() {
@@ -104,10 +105,9 @@ Item {
     }
 
     function exportLog() {
-        saveFileNameDialog.open(); // Prompt for file name
+        saveFileNameDialog.open(); 
     }
 
-    // Header Row with Text and Clear Button
     Text {
         id: headerText
         text: "This page logs lastheard stations in descending order. An upgrade to a native Log book is coming soon."
@@ -130,13 +130,13 @@ Item {
         }
 
         background: Rectangle {
-            color: "red"  // Set the background color to red
-            radius: 4  // Optional: Add some rounding to the corners
+            color: "red"  
+            radius: 4  
         }
 
         contentItem: Text {
             text: clearButton.text
-            color: "white"  // Set text color to white for contrast
+            color: "white" 
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             anchors.centerIn: parent
@@ -144,7 +144,7 @@ Item {
         }
     }
 
-    // Add an Export button
+   
     Button {
         id: exportButton
         text: "Export Log"
@@ -153,13 +153,13 @@ Item {
         onClicked: exportLog()
 
         background: Rectangle {
-            color: "green"  // Set the background color to green
-            radius: 4  // Optional: Add some rounding to the corners
+            color: "green"  
+            radius: 4  
         }
 
         contentItem: Text {
             text: exportButton.text
-            color: "white"  // Set text color to white for contrast
+            color: "white"  
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             anchors.centerIn: parent
@@ -168,24 +168,24 @@ Item {
     }
 
 
-    // Clone the button using properties from mainTab's buttonTX
+   
     Button {
         id: clonedButton
         visible: mainTab.buttonTX.visible
         enabled: mainTab.buttonTX.enabled
         x: exportButton.x + exportButton.width + 10
         y: exportButton.y
-        width: exportButton.width * 1.5  // Increase the width of the button
+        width: exportButton.width * 1.5  
         height: exportButton.height
         background: Rectangle {
             color: mainTab.buttonTX.tx ? "#800000" : "steelblue"
             radius: 4
 
-            // Explicitly set the text for the cloned button
+           
             Text {
                 id: clonedText
                 anchors.centerIn: parent
-                font.pointSize: 20  // Adjust font size as needed
+                font.pointSize: 20  
                 text: mainTab.buttonTX.tx ? "TX" : "TX"
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -233,6 +233,11 @@ Item {
         }
 
         onAccepted: {
+            var fileName = fileNameInput.text.trim();
+            if (fileName === "") {
+                      errorDialog.open(); // Show error dialog if the file name is empty
+                      return; // Prevent further execution
+                  }
             var logData = [];
             var hasSelection = false;
             for (var i = 0; i < logModel.count; i++) {
@@ -249,7 +254,7 @@ Item {
                 }
             }
 
-            var fileName = fileNameInput.text;
+
             var filePath = logHandler.getDSLogPath() + "/" + fileName;
 
             if (csvRadioButton.checked) {
@@ -276,6 +281,22 @@ Item {
         }
     }
 
+    // Error Dialog to show if file name is empty
+    Dialog {
+        id: errorDialog
+        title: "Error"
+        standardButtons: Dialog.Ok
+        modal: true
+
+        contentItem: Text {
+            text: "Empty/Invalid File Name."
+            wrapMode: Text.WordWrap
+            color: "red"
+            width: parent.width * 0.9
+        }
+    }
+
+
     // Dialog to show that the file was saved
     Dialog {
         id: fileSavedDialog
@@ -289,24 +310,24 @@ Item {
 
         background: Rectangle {
             color: "#80c342"
-            radius: 8  // Optional: Add rounded corners
+            radius: 8 
         }
 
         contentItem: Text {
             text: "File saved successfully to " + savedFilePath
             font.pointSize: 14
             color: "black"
-            wrapMode: Text.WordWrap  // Enable text wrapping
-            width: parent.width * 0.9  // Ensure some padding from the edges
+            wrapMode: Text.WordWrap  
+            width: parent.width * 0.9  
         }
     }
 
     Row {
         id: tableHeader
         width: parent.width
-        height: 25  // Make the rectangles slightly smaller in height
+        height: 25  
         y: clearButton.y + clearButton.height + 10
-        spacing: 4 // Reduce spacing slightly
+        spacing: 4
 
         Rectangle {
             width: parent.width / 8
@@ -316,7 +337,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Sr.No"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -327,7 +348,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Callsign"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -338,7 +359,7 @@ Item {
                 anchors.centerIn: parent
                 text: "DMR ID"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -349,7 +370,7 @@ Item {
                 anchors.centerIn: parent
                 text: "TGID"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -360,7 +381,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Handle"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12 
             }
         }
         Rectangle {
@@ -371,12 +392,12 @@ Item {
                 anchors.centerIn: parent
                 text: "Country"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
     }
 
-    // The TableView for the rows
+  
     TableView {
         id: tableView
         x: 0
@@ -388,13 +409,13 @@ Item {
         delegate: Rectangle {
             width: tableView.width
             implicitWidth: tableView.width
-            implicitHeight: 100  // Adjust the height to accommodate the checkbox and time text
+            implicitHeight: 100 
             height: implicitHeight
-            color: checkBox.checked ? "#b9fbd7" : (index % 2 === 0 ? "lightgrey" : "white")  // Changes color when checked
+            color: checkBox.checked ? "#b9fbd7" : (index % 2 === 0 ? "lightgrey" : "white")  
 
             Row {
                 width: parent.width
-                height: 40  // Set a fixed height for the row
+                height: 40  
 
                 Rectangle {
                     width: parent.width / 8
@@ -402,7 +423,7 @@ Item {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: serialNumber  // Using direct access to model properties
+                        text: serialNumber  
                         font.pixelSize: 12
                     }
                 }
@@ -412,7 +433,7 @@ Item {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: callsign  // Using direct access to model properties
+                        text: callsign 
                         font.pixelSize: 12
                     }
                 }
@@ -422,7 +443,7 @@ Item {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: dmrID  // Using direct access to model properties
+                        text: dmrID  
                         font.pixelSize: 12
                     }
                 }
@@ -432,7 +453,7 @@ Item {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: tgid  // Using direct access to model properties
+                        text: tgid  
                         font.pixelSize: 12
                     }
                 }
@@ -442,7 +463,7 @@ Item {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: fname  // Using direct access to model properties
+                        text: fname  
                         font.pixelSize: 12
                     }
                 }
@@ -452,7 +473,7 @@ Item {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: country  // Using direct access to model properties
+                        text: country 
                         font.pixelSize: 12
                     }
                 }
@@ -486,7 +507,7 @@ Item {
 
                 Text {
                                id: menuIcon
-                               text: "\uf0c9"  // FontAwesome icon for bars (hamburger menu)
+                               text: "\uf0c9"  
                                font.family: "FontAwesome"
                                font.pixelSize: 20
                                anchors.verticalCenter: parent.verticalCenter
@@ -509,7 +530,7 @@ Item {
                        Menu {
                            id: contextMenu
                            title: "Lookup Options"
-                           visible: false  // Ensure it's not visible by default
+                           visible: false 
                            MenuItem {
                                text: "Lookup QRZ"
                                onTriggered: Qt.openUrlExternally("https://qrz.com/lookup/" + model.callsign)
@@ -530,8 +551,8 @@ Item {
 
     function onDataUpdated(receivedDmrID, receivedTGID) {
         console.log("Received dmrID:", receivedDmrID, "and TGID:", receivedTGID);
-        qsoTab.dmrID = receivedDmrID;  // Correctly scope the dmrID assignment
-        qsoTab.tgid = receivedTGID;    // Set the TGID in qsoTab
+        qsoTab.dmrID = receivedDmrID;  
+        qsoTab.tgid = receivedTGID;    
         fetchData(receivedDmrID, receivedTGID);
     }
 
@@ -547,7 +568,7 @@ Item {
                         var data = {
                             callsign: result.callsign,
                             dmrID: result.id,
-                            tgid: tgid,  // Include TGID in the data object
+                            tgid: tgid, 
                             country: result.country,
                             fname: result.fname,
                             currentTime: Qt.formatDateTime(new Date(), "yyyy-MM-dd HH:mm:ss")  // Current local time
@@ -570,16 +591,17 @@ Item {
                 return;
             }
 
-            // Check and update the country field
+          
             if (data.country === "United States") {
                 data.country = "USA";
             } else if (data.country === "United Kingdom") {
                 data.country = "UK";
             }
 
-            latestSerialNumber += 1; // Increment for the next entry
+            latestSerialNumber += 1;
+            isLoading = false;
 
-            // Insert the new entry with the next serial number
+           
             logModel.insert(0, {
                 serialNumber: latestSerialNumber,
                 callsign: data.callsign,
@@ -591,14 +613,10 @@ Item {
                 checked: false
             });
 
-
-            // Save the updated log
             saveSettings();
-
-            // Ensure that the log doesn't exceed the maximum number of entries
             const maxEntries = 250;
             while (logModel.count > maxEntries) {
-                logModel.remove(logModel.count - 1);  // Remove the oldest entry
+                logModel.remove(logModel.count - 1);  
             }
         }
     }
