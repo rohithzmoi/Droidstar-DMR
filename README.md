@@ -55,7 +55,7 @@ If you would like to support the development of the iOS TestFlight or public rel
 
 ## 🌟 Contributors
 
-I deeply appreciate the incredible efforts and dedication of our contributors who have played a vital role in enhancing this project. Your passion and commitment drive me forward, and I am honored to have you as a part of our journey. Thank you for being an essential part of this project! 🚀
+I deeply appreciate the incredible contributions by our patrons/contributors who have played a vital role in enhancing this project. Your passion and commitment drive me forward, and I am honored to have you as a part of our journey. Thank you for being an essential part of this project! 🚀
 
 ### Special Thanks To:
 
@@ -63,8 +63,12 @@ I deeply appreciate the incredible efforts and dedication of our contributors wh
 - **@Impossible_Duty_8935** • [Reddit](https://www.reddit.com/user/Impossible_Duty_8935)
 - **houjoe318**
 - **beny6258**
+- **Tim GW4VXE**
+- **Ian R**
+- **N2HT**
+- **steff6272**
 
 ---
 
-Want to see your name here? Contribute today and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
+Want to see your name here? Contribute today (**[buy me a coffee](https://buymeacoffee.com/rohithz)**.) and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
 
