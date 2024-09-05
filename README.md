@@ -24,6 +24,9 @@ I am excited to announce the release of several new features and improvements:
 
 - **Simplified User Interface**: The user interface has been simplified by replacing the text "Main" with a "Home" icon for a more intuitive experience.
 
+- **Recent TG-ID Dropdown**: The dropdown records all the recently dialed Talk Group ids and lets you choose from the list. You no longer have to memorize the TG ID.
+
+  
 ## Downloads
 
 - For Android users, you can download the app via [this link](https://inz.to/droidstar-vu3lvo).
