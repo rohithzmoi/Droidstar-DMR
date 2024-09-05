@@ -274,6 +274,9 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.0;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
             }
             if(droidstar.get_mode() === "DCS"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -290,6 +293,13 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.0;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
+
             }
             if(droidstar.get_mode() === "XRF"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -306,6 +316,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.0;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
             }
             if(droidstar.get_mode() === "YSF"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -322,6 +337,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
             }
 			if(droidstar.get_mode() === "FCS"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -338,6 +358,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
 			}
             if(droidstar.get_mode() === "DMR"){
 				//mainTab.comboMode.width = (mainTab.width / 5) - 5;
@@ -355,6 +380,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = true;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.recentTgLabel.visible = true;
+				mainTab.recentTgidsComboBox.visible = true;
+				mainTab.lastHeard.visible = true;
+				mainTab.firstRowData.visible = true;
+				mainTab.secondRowData.visible = true;
             }
             if(droidstar.get_mode() === "P25"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -372,6 +402,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
+				mainTab.recentTgLabel.visible = true;
+				mainTab.recentTgidsComboBox.visible = true;
             }
             if(droidstar.get_mode() === "NXDN"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -388,6 +423,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
             }
 			if(droidstar.get_mode() === "M17"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -406,6 +446,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = true;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
 			}
 			if(droidstar.get_mode() === "IAX"){
 				//mainTab.comboMode.width = mainTab.width / 2;
@@ -422,6 +467,11 @@ ApplicationWindow {
 				mainTab.comboM17CAN.visible = false;
 				mainTab.privateBox.visible = false;
 				mainTab.sliderMicGain.value = 0.5;
+				mainTab.recentTgLabel.visible = false;
+				mainTab.recentTgidsComboBox.visible = false;
+				mainTab.lastHeard.visible = false;
+				mainTab.firstRowData.visible = false;
+				mainTab.secondRowData.visible = false;
 			}
         }
 		function onUpdate_data() {
@@ -557,6 +607,7 @@ ApplicationWindow {
 				if(mainTab.comboMode.currentText != "REF"){
 					mainTab.comboModule.enabled = false;
 				}
+
             }
 			if(c === 2){
 				mainTab.connectbutton.text = "Disconnect";
