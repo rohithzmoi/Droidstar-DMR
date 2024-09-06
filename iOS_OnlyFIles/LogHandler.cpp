@@ -23,6 +23,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QDesktopServices>
+
+
 
 LogHandler::LogHandler(QObject *parent) : QObject(parent)
 {
@@ -162,6 +165,7 @@ bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logDa
 
     file.close();
     qDebug() << "Log exported successfully to" << filePath;
+    lastSavedFilePath = filePath;
     return true;
 }
 
@@ -191,30 +195,45 @@ bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logD
     // Write each QSO record in ADIF format
     for (int i = 0; i < logData.size(); ++i) {
         QJsonObject entry = logData[i].toObject();
-
-        // Extract and format date and time
         QString currentTime = entry["currentTime"].toString();
         QString qsoDate = currentTime.left(10).remove('-'); // Format: YYYYMMDD
         QString timeOn = currentTime.mid(11, 8).remove(':'); // Format: HHMMSS
-
-        // Write each QSO record with valid ADIF tags
         out << "<CALL:" << entry["callsign"].toString().length() << ">" << entry["callsign"].toString();
         out << "<BAND:4>70CM";  // Band is hardcoded as "70CM"
-        out << "<MODE:12>DIGITALVOICE";    // Mode is set to "DIGITALVOICE"
+        out << "<MODE:12>DIGITALVOICE";    // Mode is set to "DIGITALVOICE , Do not change"
         // Include the first name in the ADIF record
         out << "<NAME:" << entry["fname"].toString().length() << ">" << entry["fname"].toString();
 
         out << "<QSO_DATE:" << qsoDate.length() << ">" << qsoDate;
         out << "<TIME_ON:6>" << timeOn;
-        out << "<EOR>\n";  // End of Record
+        out << "<EOR>\n";  // End of Record, Important
     }
 
     file.close();
     qDebug() << "Log exported successfully to" << filePath;
+    lastSavedFilePath = filePath;
     return true;
 }
 
-// Extract and display a user-friendly path
+
 QString LogHandler::getFriendlyPath(const QString &fullPath) const {
     return fullPath.mid(fullPath.indexOf("/Documents/"));
+}
+
+void LogHandler::shareFile() {
+#ifdef Q_OS_IOS
+    if (lastSavedFilePath.isEmpty()) {
+        qDebug() << "No file has been saved to share.";
+        return;
+    }
+
+    QFileInfo fileInfo(lastSavedFilePath);
+    if (!fileInfo.exists()) {
+        qDebug() << "File does not exist: " << lastSavedFilePath;
+        return;
+    }
+    shareFileOnIOS(lastSavedFilePath);
+#else
+    qDebug() << "Share functionality is only implemented for iOS.";
+#endif
 }
