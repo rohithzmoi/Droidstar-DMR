@@ -32,7 +32,7 @@ I am excited to announce the release of several new features and improvements:
 - For Android users, you can download the app via [this link](https://inz.to/droidstar-vu3lvo).
 - For older Android versions (Armabi_v7a), please use [this link](https://inz.to/droidstar-vu3lvo).
 
-- For iOS users, the iOS version is now available! Due to the 10k limit on TestFlight, I won’t be posting the invitation link publicly. If you’re interested in testing the iOS version, please PM me.
+- For iOS users, the iOS version is now available! Due to the 10k limit on TestFlight, I won’t be posting the invitation link publicly. If you’re interested in testing the iOS version, please mail me at vu3lvo@proton.me.
 
 ## Feedback and Support
 
