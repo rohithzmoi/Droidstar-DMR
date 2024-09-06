@@ -1,6 +1,6 @@
 /*
-    
     Copyright (C) 2024 Rohith Namboothiri
+
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -30,8 +30,8 @@ Item {
     property int tgid: -1
     property string logFileName: "logs.json"
     property string savedFilePath: ""
-    //property int latestSerialNumber: 0 
-    property int latestSerialNumber: 1
+    property int latestSerialNumber: 0
+    property bool isLoading: true
 
    
     signal firstRowDataChanged(string serialNumber, string callsign, string handle, string country)
@@ -63,7 +63,6 @@ Item {
     target: logModel
     onCountChanged: {
         updateRowData();
-        saveSettings(); // Save logs when the model changes
     }
 }
 
@@ -92,6 +91,7 @@ Item {
         logModel.append(savedData[i]);
         latestSerialNumber = Math.max(latestSerialNumber, savedData[i].serialNumber + 1);
     }
+        isLoading = false;
 }
 
     function clearSettings() {
@@ -273,37 +273,77 @@ Item {
         }
     }
 
+// Error Dialog to show if file name is empty
+Dialog {
+    id: errorDialog
+    title: "Error"
+    standardButtons: Dialog.Ok
+    modal: true
+    width: 300
+
+    contentItem: Text {
+        text: "Empty/Invalid File Name."
+        wrapMode: Text.WordWrap
+        color: "red"
+        width: parent.width * 0.9
+    }
+}
+
     // Dialog to show that the file was saved
     Dialog {
-        id: fileSavedDialog
-        title: "File Saved"
-        standardButtons: Dialog.Ok
-        width: 300  // Set a fixed width for the dialog to avoid binding loops
+    id: fileSavedDialog
+    title: "File Saved"
+    standardButtons: Dialog.Ok
+    width: 300
 
-        onAccepted: {
-            console.log("File saved successfully!");
-        }
+    onAccepted: {
+        console.log("File saved successfully!");
+    }
 
-        background: Rectangle {
-            color: "#80c342"
-            radius: 8  // Optional: Add rounded corners
-        }
+    background: Rectangle {
+        color: "#80c342"
+        radius: 8 
+    }
 
-        contentItem: Text {
+    contentItem: Column {
+        spacing: 10 
+
+        // Text to display the success message
+        Text {
             text: "File saved successfully to " + savedFilePath
             font.pointSize: 14
             color: "black"
-            wrapMode: Text.WordWrap  // Enable text wrapping
-            width: parent.width * 0.9  // Ensure some padding from the edges
+            wrapMode: Text.WordWrap  
+            width: parent.width * 0.9 
+        }
+
+        // Row for the buttons
+        Row {
+            spacing: 10  
+            anchors.horizontalCenter: parent.horizontalCenter  
+
+             Button {
+                text: "Cancel"
+                onClicked: fileSavedDialog.accept()  
+            }
+
+            Button {
+                text: "Share"
+                onClicked: {
+                    logHandler.shareFile();
+                }
+            }
         }
     }
+}
+
 
     Row {
         id: tableHeader
         width: parent.width
-        height: 25  // Make the rectangles slightly smaller in height
+        height: 25  
         y: clearButton.y + clearButton.height + 10
-        spacing: 4 // Reduce spacing slightly
+        spacing: 4 
 
         Rectangle {
             width: parent.width / 8
@@ -313,7 +353,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Sr.No"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -324,7 +364,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Callsign"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -335,7 +375,7 @@ Item {
                 anchors.centerIn: parent
                 text: "DMR ID"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -346,7 +386,7 @@ Item {
                 anchors.centerIn: parent
                 text: "TGID"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12 
             }
         }
         Rectangle {
@@ -357,7 +397,7 @@ Item {
                 anchors.centerIn: parent
                 text: "Handle"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
         Rectangle {
@@ -368,12 +408,12 @@ Item {
                 anchors.centerIn: parent
                 text: "Country"
                 font.bold: true
-                font.pixelSize: 12  // Smaller font size
+                font.pixelSize: 12  
             }
         }
     }
 
-   // The TableView for the rows
+
 TableView {
     id: tableView
     x: 0
@@ -385,13 +425,13 @@ TableView {
     delegate: Rectangle {
         width: tableView.width
         implicitWidth: tableView.width
-        implicitHeight: 100  // Adjust the height to accommodate the checkbox and time text
+        implicitHeight: 100  
         height: implicitHeight
-        color: checkBox.checked ? "#b9fbd7" : (index % 2 === 0 ? "lightgrey" : "white")  // Changes color when checked
+        color: checkBox.checked ? "#b9fbd7" : (index % 2 === 0 ? "lightgrey" : "white") 
 
         Row {
             width: parent.width
-            height: 40  // Set a fixed height for the row
+            height: 40  
 
             Rectangle {
                 width: parent.width / 8
@@ -399,7 +439,7 @@ TableView {
                 color: "transparent"
                 Text {
                     anchors.centerIn: parent
-                    text: serialNumber  // Using direct access to model properties
+                    text: serialNumber  
                     font.pixelSize: 12
                 }
             }
@@ -409,7 +449,7 @@ TableView {
                 color: "transparent"
                 Text {
                     anchors.centerIn: parent
-                    text: callsign  // Using direct access to model properties
+                    text: callsign  
                     font.pixelSize: 12
                 }
             }
@@ -419,7 +459,7 @@ TableView {
                 color: "transparent"
                 Text {
                     anchors.centerIn: parent
-                    text: dmrID  // Using direct access to model properties
+                    text: dmrID  
                     font.pixelSize: 12
                 }
             }
@@ -429,7 +469,7 @@ TableView {
                 color: "transparent"
                 Text {
                     anchors.centerIn: parent
-                    text: tgid  // Using direct access to model properties
+                    text: tgid  
                     font.pixelSize: 12
                 }
             }
@@ -439,7 +479,7 @@ TableView {
                 color: "transparent"
                 Text {
                     anchors.centerIn: parent
-                    text: fname  // Using direct access to model properties
+                    text: fname  
                     font.pixelSize: 12
                 }
             }
@@ -449,7 +489,7 @@ TableView {
                 color: "transparent"
                 Text {
                     anchors.centerIn: parent
-                    text: country  // Using direct access to model properties
+                    text: country  
                     font.pixelSize: 12
                 }
             }
@@ -482,7 +522,7 @@ TableView {
 
                 Text {
                                id: menuIcon
-                               text: "\uf0c9"  // FontAwesome icon for bars (hamburger menu)
+                               text: "\uf0c9"
                                font.family: "FontAwesome"
                                font.pixelSize: 20
                                anchors.verticalCenter: parent.verticalCenter
@@ -526,8 +566,8 @@ TableView {
 
     function onDataUpdated(receivedDmrID, receivedTGID) {
         console.log("Received dmrID:", receivedDmrID, "and TGID:", receivedTGID);
-        qsoTab.dmrID = receivedDmrID;  // Correctly scope the dmrID assignment
-        qsoTab.tgid = receivedTGID;    // Set the TGID in qsoTab
+        qsoTab.dmrID = receivedDmrID;  
+        qsoTab.tgid = receivedTGID;    
         fetchData(receivedDmrID, receivedTGID);
     }
 
@@ -565,9 +605,8 @@ TableView {
             console.error("Invalid data received:", data);
             return;
         }
+            isLoading = false;
         
-        // Increment the latest serial number
-        latestSerialNumber += 1;
 
         // Check and update the country field
         if (data.country === "United States") {
@@ -576,10 +615,7 @@ TableView {
             data.country = "UK";
         }
 
-       
-        
-
-        logModel.insert(0, {
+            logModel.insert(0, {
             serialNumber: latestSerialNumber,
             callsign: data.callsign,
             dmrID: data.dmrID,
@@ -590,14 +626,14 @@ TableView {
             checked: false
         });
        
-
-        // Save the updated log
+        
+        latestSerialNumber += 1;
         saveSettings();
 
         // Ensure that the log doesn't exceed the maximum number of entries
         const maxEntries = 250;
         while (logModel.count > maxEntries) {
-            logModel.remove(logModel.count - 1);  // Remove the oldest entry
+            logModel.remove(logModel.count - 1);
         }
     }
 }
