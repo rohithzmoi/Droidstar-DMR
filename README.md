@@ -73,6 +73,8 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **Mark Flett**
 - **Marco KC2ZMA**
 - **Ray**
+- **K7RAN**
+- **ZL2BEZ**
 
 ---
 
