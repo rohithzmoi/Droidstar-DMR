@@ -52,36 +52,73 @@ Item {
                            "\n\nThis customized iOS/Android version, built and distributed by VU3LVO, is specifically designed for use by a select group and is not intended for public use at the moment.")
             }
 
-            // Buy Me a Coffee Button - This contribution will help me pay for the Apple developer program and keep iOS app live. 
-            Rectangle {
-                id: buyMeCoffeeButton
-                width: 200
-                height: 50
-                color: "#FFDD00" // Color matching Buy Me a Coffee branding
-                radius: 10
-                border.color: "#333333"
+            // Row to align buttons side-by-side
+            Row {
+                id: buttonRow
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: aboutText.bottom
-                anchors.topMargin: 20 // Space between text and button
+                anchors.topMargin: 20 // Space between text and buttons
+                spacing: 10 // Space between buttons
 
-                Text {
-                    id: buttonText
-                    anchors.centerIn: parent
-                    text: qsTr("Buy Me a Coffee")
-                    color: "#333333"
-                    font.bold: true
+                // Buy Me a Coffee Button
+                Rectangle {
+                    id: buyMeCoffeeButton
+                    width: 200
+                    height: 50
+                    color: "#FFDD00" // Color matching Buy Me a Coffee branding
+                    radius: 10
+                    border.color: "#333333"
+
+                    Text {
+                        id: buttonText
+                        anchors.centerIn: parent
+                        text: qsTr("Buy Me a Coffee")
+                        color: "#333333"
+                        font.bold: true
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            Qt.openUrlExternally("https://buymeacoffee.com/rohithz")
+                        }
+                        onPressed: {
+                            buyMeCoffeeButton.color = "#FFC700" // Slight color change on press
+                        }
+                        onReleased: {
+                            buyMeCoffeeButton.color = "#FFDD00"
+                        }
+                    }
                 }
 
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: {
-                        Qt.openUrlExternally("https://buymeacoffee.com/rohithz")
+                // PayPal Button
+                Rectangle {
+                    id: paypalButton
+                    width: 200
+                    height: 50
+                    color: "#0070BA"
+                    radius: 10
+                    border.color: "#333333"
+
+                    Text {
+                        id: paypalButtonText
+                        anchors.centerIn: parent
+                        text: qsTr("Contribute via PayPal")
+                        color: "white"
+                        font.bold: true
                     }
-                    onPressed: {
-                        buyMeCoffeeButton.color = "#FFC700" // Slight color change on press
-                    }
-                    onReleased: {
-                        buyMeCoffeeButton.color = "#FFDD00"
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            Qt.openUrlExternally("https://www.paypal.com/ncp/payment/NU89529268M2W")
+                        }
+                        onPressed: {
+                            paypalButton.color = "#00548F" // Slight color change on press
+                        }
+                        onReleased: {
+                            paypalButton.color = "#0070BA"
+                        }
                     }
                 }
             }
