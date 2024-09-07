@@ -76,6 +76,7 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **K7RAN**
 - **ZL2BEZ**
 - **Vk4sm**
+- **WA3ADI**
 
 ---
 
