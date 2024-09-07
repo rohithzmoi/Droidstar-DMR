@@ -14,7 +14,7 @@ I am excited to announce the release of several new features and improvements:
 
 - **TX Button and Net Status Integration**: The QSO Tab now includes a TX button with integrated Net Status, providing real-time feedback on the connection status (Host Connected or Not Connected).
 
-- **Enhanced Export Options**: You can now export QSO logs in CSV or ADIF formats. Additionally, you can selectively choose specific log entries for inclusion in the exported file.
+- **Enhanced Export Options**: You can now export QSO logs in CSV or ADIF formats. Additionally, you can selectively choose specific log entries for inclusion in the exported file. You can also share the exported file directly from the app via WhatsApp, email, or any other app on your device.
 
 - **"Last Heard" on Home Page**: The app now features "Last Heard" as two rows on the home page, providing quick access to recent transmissions. The AMBES notification has been moved to the Settings for better organization.
 
@@ -75,6 +75,7 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **Ray**
 - **K7RAN**
 - **ZL2BEZ**
+- **Vk4sm**
 
 ---
 
