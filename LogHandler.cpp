@@ -26,6 +26,11 @@
 #include <QStandardPaths>
 #include <QFileInfo>
 
+#ifdef Q_OS_ANDROID
+#include <QtCore/QJniObject>
+#include <QtCore/QCoreApplication>
+#endif
+
 LogHandler::LogHandler(QObject *parent) : QObject(parent)
 {
 }
@@ -218,3 +223,56 @@ bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logD
 QString LogHandler::getFriendlyPath(const QString &fullPath) const {
     return fullPath.mid(fullPath.indexOf("/Download/"));
 }
+
+void LogHandler::shareFile(const QString &filePath) {
+#ifdef Q_OS_IOS
+    shareFileOnIOS(filePath); // iOS-specific sharing method
+#elif defined(Q_OS_ANDROID)
+    shareFileDirectly(filePath); // Android-specific sharing method
+#else
+    qWarning("File sharing is only implemented for iOS and Android.");
+#endif
+}
+void LogHandler::shareFileDirectly(const QString &filePath) {
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+
+    if (context.isValid()) {
+        QString relativeFilePath = filePath.section("Download/", 1);
+        QJniObject javaFile("java/io/File", "(Ljava/lang/String;)V", QJniObject::fromString("/storage/emulated/0/Download/" + relativeFilePath).object<jstring>());
+
+        if (javaFile.isValid()) {
+            QString authority = "com.dmr.droidstardmr.fileprovider"; 
+            QJniObject authorityObject = QJniObject::fromString(authority);
+            QJniObject fileUri = QJniObject::callStaticObjectMethod(
+                "androidx/core/content/FileProvider",
+                "getUriForFile",
+                "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
+                context.object(),
+                authorityObject.object<jstring>(),
+                javaFile.object()
+                );
+
+            if (fileUri.isValid()) {
+                QJniObject shareIntent("android/content/Intent", "(Ljava/lang/String;)V", QJniObject::fromString("android.intent.action.SEND").object());
+                shareIntent.callObjectMethod("setType", "(Ljava/lang/String;)Landroid/content/Intent;", QJniObject::fromString("text/csv").object());
+                shareIntent.callObjectMethod("putExtra", "(Ljava/lang/String;Landroid/os/Parcelable;)Landroid/content/Intent;", QJniObject::fromString("android.intent.extra.STREAM").object(), fileUri.object());
+
+                shareIntent.callMethod<void>("addFlags", "(I)V", jint(1));
+
+                context.callObjectMethod("startActivity", "(Landroid/content/Intent;)V", QJniObject::callStaticObjectMethod(
+                                                                                             "android/content/Intent", "createChooser",
+                                                                                             "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;",
+                                                                                             shareIntent.object(),
+                                                                                             QJniObject::fromString("Share File").object()
+                                                                                             ).object());
+            } else {
+                qWarning("Failed to obtain file URI for sharing.");
+            }
+        } else {
+            qWarning("Failed to create java.io.File object.");
+        }
+    } else {
+        qWarning("Invalid context or file path object.");
+    }
+}
+
