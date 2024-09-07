@@ -21,14 +21,32 @@
             <meta-data android:name="android.app.splash_screen_drawable" android:resource="@drawable/splashscreen"/>
             <meta-data android:name="android.app.splash_screen_drawable_portrait" android:resource="@drawable/splashscreen_port"/>
             <meta-data android:name="android.app.splash_screen_drawable_landscape" android:resource="@drawable/splashscreen_land"/>
+            <meta-data android:name="android.app.splash_screen_drawable" android:resource="@drawable/splashscreen"/>
+            <meta-data android:name="android.app.splash_screen_drawable_portrait" android:resource="@drawable/splashscreen_port"/>
+            <meta-data android:name="android.app.splash_screen_drawable_landscape" android:resource="@drawable/splashscreen_land"/>
+            <meta-data android:name="android.app.splash_screen_drawable" android:resource="@drawable/splashscreen"/>
+            <meta-data android:name="android.app.splash_screen_drawable_portrait" android:resource="@drawable/splashscreen_port"/>
+            <meta-data android:name="android.app.splash_screen_drawable_landscape" android:resource="@drawable/splashscreen_land"/>
+            <meta-data android:name="android.app.splash_screen_drawable" android:resource="@drawable/splashscreen"/>
+            <meta-data android:name="android.app.splash_screen_drawable_portrait" android:resource="@drawable/splashscreen_port"/>
+            <meta-data android:name="android.app.splash_screen_drawable_landscape" android:resource="@drawable/splashscreen_land"/>
         </activity>
 
         <!-- Ensure the service is not stopped when the app is backgrounded -->
         <service android:name=".YourForegroundService" android:exported="false" android:stopWithTask="false"/>
 
-        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.qtprovider" android:exported="false" android:grantUriPermissions="true">
-            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/qtprovider_paths"/>
-        </provider>
+<provider
+    android:name="androidx.core.content.FileProvider"
+    android:authorities="${applicationId}.qtprovider;com.dmr.droidstardmr.fileprovider"
+    android:exported="false"
+    android:grantUriPermissions="true">
+    <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/qtprovider_paths"/>
+
+</provider>
+
+
     </application>
 
     <uses-permission android:name="android.permission.INTERNET"/>
