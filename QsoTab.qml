@@ -317,7 +317,7 @@ Dialog {
     }
 */
 
-    // Dialog to show that the file was saved
+// Dialog to show that the file was saved
     Dialog {
         id: fileSavedDialog
         title: "File Saved"
@@ -330,17 +330,41 @@ Dialog {
 
         background: Rectangle {
             color: "#80c342"
-            radius: 8 
+            radius: 8  // Optional: Add rounded corners
         }
 
-        contentItem: Text {
-            text: "File saved successfully to " + savedFilePath
-            font.pointSize: 14
-            color: "black"
-            wrapMode: Text.WordWrap  
-            width: parent.width * 0.9  
+        contentItem: Column {
+            spacing: 10  // Add some spacing between the text and buttons
+
+            // Text to display the success message
+            Text {
+                text: "File saved successfully to " + savedFilePath
+                font.pointSize: 14
+                color: "black"
+                wrapMode: Text.WordWrap  // Enable text wrapping
+                width: parent.width * 0.9  // Ensure some padding from the edges
+            }
+
+            // Row for the buttons
+            Row {
+                spacing: 10  // Add some spacing between the buttons
+                anchors.horizontalCenter: parent.horizontalCenter  // Center the buttons horizontally
+
+                Button {
+                    text: "Cancel"
+                    onClicked: fileSavedDialog.accept()  // Handle the Ok button click
+                }
+
+                Button {
+                    text: "Share"
+                    onClicked: {
+                        logHandler.shareFile(savedFilePath);
+                    }
+                }
+            }
         }
     }
+
 
     Row {
         id: tableHeader
