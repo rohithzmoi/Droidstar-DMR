@@ -18,6 +18,11 @@
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 
+
+
+extern "C" void AudioEngine_stop_playback();
+extern "C" void AudioEngine_start_playback();
+
 static UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
 
 
@@ -36,7 +41,7 @@ extern "C" void setupAVAudioSession() {
 
         if (!success || error) {
             NSLog(@"Error setting AVAudioSession category: %@, code: %ld", error.localizedDescription, (long)error.code);
-            return; 
+            return;
         }
         NSLog(@"AVAudioSession category set to PlayAndRecord with DefaultToSpeaker option");
 
@@ -81,12 +86,18 @@ extern "C" void setupAVAudioSession() {
                 reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable ||
                 reason == AVAudioSessionRouteChangeReasonOverride) {
                 NSLog(@"Audio route change detected, attempting to reactivate...");
+                // Call C++ function to stop playback
+                AudioEngine_stop_playback();
                 NSError *activationError = nil;
                 BOOL reactivationSuccess = [session setActive:YES error:&activationError];
+                AudioEngine_start_playback();
                 if (!reactivationSuccess) {
                     NSLog(@"Error re-activating AVAudioSession after route change: %@, code: %ld", activationError.localizedDescription, (long)activationError.code);
                 } else {
                     NSLog(@"Audio session successfully reactivated after route change");
+                    
+                    // Call C++ function to start playback
+                                        //AudioEngine_start_playback();
                 }
             }
         }];
@@ -108,7 +119,7 @@ extern "C" void deactivateAVAudioSession() {
         BOOL success = [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:&error];
         if (!success || error) {
             NSLog(@"Error deactivating AVAudioSession: %@, code: %ld", error.localizedDescription, (long)error.code);
-            return; 
+            return;
         }
 
         NSLog(@"AVAudioSession deactivated successfully");
