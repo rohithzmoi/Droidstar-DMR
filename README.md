@@ -83,5 +83,5 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 
 ---
 
-Want to see your name here? Contribute today (**[buy me a coffee](https://buymeacoffee.com/rohithz)**.) and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
+Want to see your name here? Contribute today (**[buy me a coffee](https://buymeacoffee.com/rohithz)**./**[Contribute Via PayPal](https://www.paypal.com/ncp/payment/NU89529268M2W)**) and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
 
