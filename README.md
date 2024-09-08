@@ -58,7 +58,7 @@ If you would like to support the development of the Droidstar DMR iOS TestFlight
 
 ## 🌟 Contributors
 
-I deeply appreciate the incredible contributions by our patrons/contributors who have played a vital role in enhancing this project. Your passion and commitment drive me forward, and I am honored to have you as a part of our journey. Thank you for being an essential part of this project! 🚀
+I deeply appreciate the incredible contributions by our patrons/contributors who have played a vital role in supporting me in keeping this project running. Your passion and commitment drive me forward, and I am honored to have you as a part of our journey. Thank you for being an essential part of this project! 🚀
 
 ### Special Thanks To:
 
