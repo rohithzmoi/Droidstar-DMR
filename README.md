@@ -77,6 +77,9 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **ZL2BEZ**
 - **Vk4sm**
 - **WA3ADI**
+- **Ve2kjf**
+- **DG9MAQ**
+- **Stefan Kowal**
 
 ---
 
