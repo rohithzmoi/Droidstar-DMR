@@ -80,6 +80,13 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **Ve2kjf**
 - **DG9MAQ**
 - **Stefan Kowal**
+- **AC1SM**
+- **Mal - VK3TV**
+- **Dennis@w2kdc**
+- **William Golden**
+- **Michael Kilsby**
+- **Esteban Mackay Quiel**
+
 
 ---
 
