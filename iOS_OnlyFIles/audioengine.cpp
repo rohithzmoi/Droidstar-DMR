@@ -1,7 +1,7 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
     Modified Copyright (C) 2024 Rohith Namboothiri
- 
+    
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -17,9 +17,9 @@
 */
 
 #include "audioengine.h"
-#include "AudioSessionManager.h"
 #include <QDebug>
 #include <cmath>
+#include "AudioSessionManager.h"
 
 #if defined (Q_OS_MACOS) || defined(Q_OS_IOS)
 #define MACHAK 1
@@ -27,31 +27,13 @@
 #define MACHAK 0
 #endif
 
-
-AudioEngine *audioEngineInstance = nullptr;
-
-// Extern C functions for Objective-C++ to call
-extern "C" void AudioEngine_start_playback() {
-    if (audioEngineInstance != nullptr) {
-        audioEngineInstance->start_playback();
-    } else {
-        qDebug() << "AudioEngine instance is not initialized.";
-    }
-}
-
-extern "C" void AudioEngine_stop_playback() {
-    if (audioEngineInstance != nullptr) {
-        audioEngineInstance->stop_playback();
-    } else {
-        qDebug() << "AudioEngine instance is not initialized.";
-    }
-}
 AudioEngine::AudioEngine(QString in, QString out) :
     m_outputdevice(out),
     m_inputdevice(in),
     m_out(nullptr),
     m_in(nullptr),
     m_srm(1)
+  
 {
     m_audio_out_temp_buf_p = m_audio_out_temp_buf;
     memset(m_aout_max_buf, 0, sizeof(float) * 200);
@@ -153,9 +135,14 @@ void AudioEngine::init()
     }
 }
 
+
+
+
+
 void AudioEngine::start_capture()
 {
     m_audioinq.clear();
+   // setupAVAudioSession();
     if(m_in != nullptr){
         m_indev = m_in->start();
         if(MACHAK) m_srm = (float)(m_in->format().sampleRate()) / 8000.0;
@@ -171,18 +158,22 @@ void AudioEngine::stop_capture()
     }
 }
 
+extern "C" void setupAVAudioSession();
+//extern "C" void setupPushKit();
 
-void AudioEngine::start_playback()
-{
-    setupAVAudioSession();
+void AudioEngine::start_playback() {
     m_outdev = m_out->start();
+    qDebug() << "Playback started";
 }
+
 
 void AudioEngine::stop_playback()
 {
     //m_outdev->reset();
     m_out->reset();
     m_out->stop();
+    qDebug() << "AudioOut state Stop Playback";
+    
 }
 
 void AudioEngine::input_data_received()
@@ -231,9 +222,11 @@ void AudioEngine::write(int16_t *pcm, size_t s)
     }
 
     size_t l = m_outdev->write((const char *) pcm, sizeof(int16_t) * s);
-
+    
+  
     if (l*2 < s){
         qDebug() << "AudioEngine::write() " << s << ":" << l << ":" << (int)m_out->bytesFree() << ":" << m_out->bufferSize() << ":" << m_out->error();
+    
     }
 
     for(uint32_t i = 0; i < s; ++i){
@@ -378,22 +371,37 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
     }
 }
 
+
 void AudioEngine::handleStateChanged(QAudio::State newState)
 {
+    static bool isSessionActive = false;
+
     switch (newState) {
     case QAudio::ActiveState:
         qDebug() << "AudioOut state active";
+        if (!isSessionActive) {
+            setupAVAudioSession();
+            isSessionActive = true;
+        }
         break;
+
     case QAudio::SuspendedState:
         qDebug() << "AudioOut state suspended";
         break;
+
     case QAudio::IdleState:
-        qDebug() << "AudioOut state idle";
-            setupBackgroundAudio();
+        qDebug() << "AudioOut state idle, renewing background task...";
+      
+       setupBackgroundAudio();
+          
+            
         break;
+
     case QAudio::StoppedState:
         qDebug() << "AudioOut state stopped";
+            
         break;
+
     default:
         break;
     }
