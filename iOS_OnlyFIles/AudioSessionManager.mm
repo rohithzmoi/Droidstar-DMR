@@ -18,21 +18,40 @@
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 #include "droidstar.h"
-
-// External C functions for calling process connect and clearing the audio buffer
 extern "C" void callProcessConnect();
 extern "C" void clearAudioBuffer();
 
 @interface AudioSessionManager : NSObject {
-    UIBackgroundTaskIdentifier _bgTask; // To manage background tasks
+    UIBackgroundTaskIdentifier _bgTask; 
+    BOOL isAudioSessionActive;         
+    BOOL isHandlingRouteChange;       
 }
 - (void)setupAVAudioSession;
+- (void)handleAudioInterruption:(NSNotification *)notification;
+- (void)handleAudioRouteChange:(NSNotification *)notification;
 - (void)setupBackgroundAudio;
 - (void)startBackgroundTask;
 - (void)stopBackgroundTask;
 @end
 
 @implementation AudioSessionManager
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        isAudioSessionActive = NO; 
+        isHandlingRouteChange = NO; 
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleAudioInterruption:)
+                                                     name:AVAudioSessionInterruptionNotification
+                                                   object:[AVAudioSession sharedInstance]];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleAudioRouteChange:)
+                                                     name:AVAudioSessionRouteChangeNotification
+                                                   object:[AVAudioSession sharedInstance]];
+    }
+    return self;
+}
 
 - (void)setupAVAudioSession {
     @try {
@@ -41,12 +60,11 @@ extern "C" void clearAudioBuffer();
 
         NSLog(@"Setting up AVAudioSession...");
 
-        // Use category options suitable for VoIP or low-latency audio
+    
         BOOL success = [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                                withOptions:AVAudioSessionCategoryOptionAllowBluetooth |
-                                            AVAudioSessionCategoryOptionMixWithOthers |
-                                            AVAudioSessionCategoryOptionDefaultToSpeaker |
-                                            AVAudioSessionCategoryOptionAllowBluetoothA2DP
+                                withOptions:(AVAudioSessionCategoryOptionAllowBluetooth |
+                                             AVAudioSessionCategoryOptionMixWithOthers |
+                                             AVAudioSessionCategoryOptionAllowBluetoothA2DP)
                                       error:&error];
 
         if (!success || error) {
@@ -55,85 +73,90 @@ extern "C" void clearAudioBuffer();
         }
         NSLog(@"AVAudioSession category set to PlayAndRecord with required options");
 
-        // Set mode to VoiceChat or VoIP to reduce latency
-        success = [session setMode:AVAudioSessionModeVoiceChat error:&error];
+       
+        success = [session setMode:AVAudioSessionModeDefault error:&error];
         if (!success || error) {
             NSLog(@"Error setting AVAudioSession mode: %@, code: %ld", error.localizedDescription, (long)error.code);
             return;
         }
-        NSLog(@"AVAudioSession mode set to VoiceChat");
-
-        // To Ensure audio is always routed to the speaker
-        success = [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:&error];
-        if (!success || error) {
-            NSLog(@"Error overriding audio output to speaker: %@, code: %ld", error.localizedDescription, (long)error.code);
-        } else {
-            NSLog(@"Audio output overridden to speaker");
+        NSLog(@"AVAudioSession mode set to Default");
+   
+        [self configureAudioRoute:session];
+        if (!isAudioSessionActive) {
+            success = [session setActive:YES error:&error];
+            if (!success || error) {
+                NSLog(@"Error activating AVAudioSession: %@, code: %ld", error.localizedDescription, (long)error.code);
+                return;
+            }
+            isAudioSessionActive = YES;
+            NSLog(@"AVAudioSession activated successfully");
         }
 
-        // Activate session
-        success = [session setActive:YES error:&error];
-        if (!success || error) {
-            NSLog(@"Error activating AVAudioSession: %@, code: %ld", error.localizedDescription, (long)error.code);
-            return;
-        }
-        NSLog(@"AVAudioSession activated successfully");
-
-        // Handle audio interruptions
-        [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionInterruptionNotification
-                                                          object:session
-                                                           queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:^(NSNotification *note) {
-            NSUInteger interruptionType = [note.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
-            if (interruptionType == AVAudioSessionInterruptionTypeBegan) {
-                NSLog(@"Audio session interruption began");
-            } else if (interruptionType == AVAudioSessionInterruptionTypeEnded) {
-                NSLog(@"Audio session interruption ended, attempting to reactivate...");
-                [self setupAVAudioSession];
-                NSError *activationError = nil;
-                BOOL reactivationSuccess = [session setActive:YES error:&activationError];
-                if (!reactivationSuccess) {
-                    NSLog(@"Error re-activating AVAudioSession after interruption: %@, code: %ld", activationError.localizedDescription, (long)activationError.code);
-                } else {
-                    NSLog(@"Audio session successfully reactivated after interruption");
-                    [session setCategory:AVAudioSessionCategoryPlayback
-                             withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker
-                                   error:nil];
-                    [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
-                    clearAudioBuffer();  // Clear the buffer to ensure current audio
-                }
-            }
-        }];
-
-        // Handle route changes (e.g., when Bluetooth or headphones are connected/disconnected)
-        [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioSessionRouteChangeNotification
-                                                          object:session
-                                                           queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:^(NSNotification *note) {
-            AVAudioSessionRouteChangeReason reason = (AVAudioSessionRouteChangeReason)[note.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
-            NSLog(@"Audio route changed, reason: %lu", (unsigned long)reason);
-            if (reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable ||
-                reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable ||
-                reason == AVAudioSessionRouteChangeReasonOverride) {
-                NSLog(@"Audio route change detected, attempting to reactivate...");
-                [self setupAVAudioSession];
-                NSError *activationError = nil;
-                BOOL reactivationSuccess = [session setActive:YES error:&activationError];
-                if (!reactivationSuccess) {
-                    NSLog(@"Error re-activating AVAudioSession after route change: %@, code: %ld", activationError.localizedDescription, (long)activationError.code);
-                } else {
-                    NSLog(@"Audio session successfully reactivated after route change");
-                    [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
-                }
-            }
-        }];
-
-        // Start background task to keep the app alive longer - Fingers Crossed :D
         [self startBackgroundTask];
     }
     @catch (NSException *exception) {
         NSLog(@"Exception setting up AVAudioSession: %@", exception.reason);
     }
+}
+
+- (void)configureAudioRoute:(AVAudioSession *)session {
+    NSError *error = nil;
+    AVAudioSessionRouteDescription *currentRoute = session.currentRoute;
+
+    BOOL hasExternalOutput = NO;
+    for (AVAudioSessionPortDescription *output in currentRoute.outputs) {
+        if ([output.portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+            [output.portType isEqualToString:AVAudioSessionPortBluetoothLE] ||
+            [output.portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+            [output.portType isEqualToString:AVAudioSessionPortHeadphones]) {
+            hasExternalOutput = YES;
+            break;
+        }
+    }
+
+    if (!hasExternalOutput) {
+        BOOL success = [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:&error];
+        if (!success || error) {
+            NSLog(@"Error overriding audio output to speaker: %@, code: %ld", error.localizedDescription, (long)error.code);
+        } else {
+            NSLog(@"Audio output overridden to speaker");
+        }
+    } else {
+        NSLog(@"External output detected, no need to override to speaker");
+    }
+}
+
+- (void)handleAudioInterruption:(NSNotification *)notification {
+    NSUInteger interruptionType = [notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
+
+    if (interruptionType == AVAudioSessionInterruptionTypeBegan) {
+        NSLog(@"Audio session interruption began");
+        isAudioSessionActive = NO; 
+    } else if (interruptionType == AVAudioSessionInterruptionTypeEnded) {
+        NSLog(@"Audio session interruption ended, attempting to reactivate...");
+        [self setupAVAudioSession];
+    }
+}
+
+- (void)handleAudioRouteChange:(NSNotification *)notification {
+    if (isHandlingRouteChange) {
+        return; 
+    }
+
+    isHandlingRouteChange = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AVAudioSessionRouteChangeReason reason = (AVAudioSessionRouteChangeReason)[notification.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
+
+        NSLog(@"Audio route changed, reason: %lu", (unsigned long)reason);
+
+        if (reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable ||
+            reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable) {
+            NSLog(@"Audio route change detected, attempting to reactivate...");
+            [self setupAVAudioSession];
+        }
+
+        isHandlingRouteChange = NO;
+    });
 }
 
 - (void)setupBackgroundAudio {
@@ -144,14 +167,13 @@ extern "C" void clearAudioBuffer();
 
             NSLog(@"Configuring AVAudioSession for background...");
 
-            // Deactivate the session before setting the category
             [session setActive:NO error:nil];
 
             BOOL success = [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                                    withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker |
-                                                AVAudioSessionCategoryOptionAllowBluetooth |
-                                                AVAudioSessionCategoryOptionAllowBluetoothA2DP |
-                                                AVAudioSessionCategoryOptionMixWithOthers
+                                    withOptions:(AVAudioSessionCategoryOptionDefaultToSpeaker |
+                                                 AVAudioSessionCategoryOptionAllowBluetooth |
+                                                 AVAudioSessionCategoryOptionAllowBluetoothA2DP |
+                                                 AVAudioSessionCategoryOptionMixWithOthers)
                                           error:&error];
 
             if (!success || error) {
@@ -166,9 +188,7 @@ extern "C" void clearAudioBuffer();
                     NSLog(@"AVAudioSession activated successfully in background");
                 }
             }
-
-            // Ensure the audio output is overridden to speake, else audio may at times play through earpiece or volume will be very less
-            [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
+            [self configureAudioRoute:session];
         });
     }
     @catch (NSException *exception) {
@@ -192,7 +212,7 @@ extern "C" void clearAudioBuffer();
 
 @end
 
-// Expose the setup and management functions to C
+
 extern "C" void setupAVAudioSession() {
     AudioSessionManager *audioManager = [[AudioSessionManager alloc] init];
     [audioManager setupAVAudioSession];
@@ -218,19 +238,18 @@ extern "C" void deactivateAVAudioSession() {
     }
 }
 
-// Handle app entering background
+
 extern "C" void setupBackgroundAudio() {
     AudioSessionManager *audioManager = [[AudioSessionManager alloc] init];
     [audioManager setupBackgroundAudio];
 }
 
-// Handle app entering foreground
 extern "C" void handleAppEnteringForeground() {
     AudioSessionManager *audioManager = [[AudioSessionManager alloc] init];
     [audioManager setupAVAudioSession];
 }
 
-// function to clear the audio buffer
+
 extern "C" void clearAudioBuffer() {
     NSLog(@"Clearing audio buffer to ensure current audio playback");
 }
