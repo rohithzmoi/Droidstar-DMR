@@ -86,6 +86,10 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 - **William Golden**
 - **Michael Kilsby**
 - **Esteban Mackay Quiel**
+- **KQ4HJH**
+- **Mattias**
+- **Luis Valencia castaño**
+- **Marco Iapicca**
 
 
 ---
