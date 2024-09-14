@@ -1,5 +1,6 @@
 /*
 	Copyright (C) 2019-2021 Doug McLain
+ 	Modified Copyright (C) 2024 Rohith Namboothiri
 
 	This program is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -58,10 +59,14 @@ public:
 	uint16_t read(int16_t *, int);
 	uint16_t read(int16_t *);
 	uint16_t level() { return m_maxlevel; }
+
+public slots:
+    void onAudioOutputChanged();
 signals:
 
 private:
 	QString m_outputdevice;
+     QMediaDevices *m_mediaDevices;
 	QString m_inputdevice;
 #if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
 	QAudioOutput *m_out;
