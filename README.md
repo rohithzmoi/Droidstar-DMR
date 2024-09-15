@@ -38,6 +38,9 @@ I am excited to announce the release of several new features and improvements:
 
 Please let me know if these features are working correctly on your device. If you have any ideas or feedback, feel free to reach out. Your input is invaluable in making this app better!
 
+## Stay Updated
+Join my WhatsApp channel to stay updated on the progress, new features and to participate in polls to get your dream features / ideas implemented in DroidStar. [**Join Now**](https://inz.to/BVmSa)
+
 ## Acknowledgments
 
 This project is based on the original work by [Doug McLain](https://github.com/nostar/). Many thanks to Doug for his excellent foundation and contributions to the digital radio community.
