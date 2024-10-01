@@ -234,6 +234,7 @@ void LogHandler::shareFile(const QString &filePath) {
 #endif
 }
 void LogHandler::shareFileDirectly(const QString &filePath) {
+#ifdef Q_OS_ANDROID
     QJniObject context = QNativeInterface::QAndroidApplication::context();
 
     if (context.isValid()) {
@@ -274,5 +275,6 @@ void LogHandler::shareFileDirectly(const QString &filePath) {
     } else {
         qWarning("Invalid context or file path object.");
     }
+#endif
 }
 

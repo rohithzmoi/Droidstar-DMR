@@ -29,7 +29,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QString>
-#include "SignalEmitter.h"
+//#include "SignalEmitter.h"
 #include <QTimer>
 
 
