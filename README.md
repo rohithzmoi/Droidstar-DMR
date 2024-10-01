@@ -26,6 +26,7 @@ I am excited to announce the release of several new features and improvements:
 
 - **Recent TG-ID Dropdown**: The dropdown records all the recently dialed Talk Group ids and lets you choose from the list. You no longer have to memorize the TG ID.
 
+- **ASL Web Transceiver**: Allows you to connect to any ASL node with your ASL password.
   
 ## Downloads
 

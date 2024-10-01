@@ -20,7 +20,7 @@
 #include <cstring>
 #include "dmr.h"
 #include <QDebug>
-#include "DroidStar.h"
+#include "droidstar.h"
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
