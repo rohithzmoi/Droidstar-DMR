@@ -28,6 +28,8 @@
 #include "vuidupdater.h"  // Include the new header
 #include "LogHandler.h"
 
+using namespace Qt::Literals::StringLiterals;
+
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
@@ -57,7 +59,7 @@ int main(int argc, char *argv[])
 #endif
 
     // Load the main QML file
-    const QUrl url(u"qrc:/DroidStar/main.qml"_qs);
+    const QUrl url(u"qrc:/DroidStar/main.qml"_s);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *obj, const QUrl &objUrl) {
                          if (!obj && url == objUrl)
