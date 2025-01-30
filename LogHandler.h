@@ -36,7 +36,9 @@ public:
     Q_INVOKABLE QString getFriendlyPath(const QString &path) const; 
     Q_INVOKABLE bool exportLogToAdif(const QString &fileName, const QJsonArray &logData);
     Q_INVOKABLE void shareFile(const QString &filePath);
+#ifdef Q_OS_ANDROID
     void shareFileDirectly(const QString &filePath);
+#endif
 
 
 private:

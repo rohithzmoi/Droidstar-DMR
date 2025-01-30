@@ -20,7 +20,7 @@
 #include <cstring>
 #include "dmr.h"
 #include <QDebug>
-#include "DroidStar.h"
+#include "droidstar.h"
 
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -60,7 +60,11 @@ DMR::DMR() :
     m_mode = "DMR";
     m_dmrcnt = 0;
     m_flco = FLCO_GROUP;
+#ifdef Q_OS_UNIX
+    m_attenuation = 1; //On linux audio in volume is very low if attenuation 5 is keeped
+#else
     m_attenuation = 5;
+#endif
 #ifdef USE_MD380_VOCODER
     md380_init();
 #endif

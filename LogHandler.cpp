@@ -233,6 +233,8 @@ void LogHandler::shareFile(const QString &filePath) {
     qWarning("File sharing is only implemented for iOS and Android.");
 #endif
 }
+
+#ifdef Q_OS_ANDROID
 void LogHandler::shareFileDirectly(const QString &filePath) {
     QJniObject context = QNativeInterface::QAndroidApplication::context();
 
@@ -275,4 +277,4 @@ void LogHandler::shareFileDirectly(const QString &filePath) {
         qWarning("Invalid context or file path object.");
     }
 }
-
+#endif
