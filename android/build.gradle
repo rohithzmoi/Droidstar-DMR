@@ -79,4 +79,9 @@ android {
         targetSdkVersion qtTargetSdkVersion
         ndk.abiFilters = qtTargetAbiList.split(",")
     }
+    externalNativeBuild {
+        cmake {
+            path "../core/CMakeLists.txt"
+        }
+    }
 }
