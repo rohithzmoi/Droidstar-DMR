@@ -1,7 +1,7 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
     Modified Copyright (C) 2024 Rohith Namboothiri
-
+    
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -19,6 +19,7 @@
 #include "audioengine.h"
 #include <QDebug>
 #include <cmath>
+#include "AudioSessionManager.h"
 
 #if defined (Q_OS_MACOS) || defined(Q_OS_IOS)
 #define MACHAK 1
@@ -39,21 +40,10 @@ AudioEngine::AudioEngine(QString in, QString out) :
     m_aout_max_buf_idx = 0;
     m_aout_gain = 100;
     m_volume = 1.0f;
-    m_mediaDevices = new QMediaDevices(this);
-    connect(m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, &AudioEngine::onAudioOutputChanged);
 }
 
 AudioEngine::~AudioEngine()
 {
-    
-    if (m_out) {
-        delete m_out;
-        m_out = nullptr;
-    }
-    if (m_in) {
-        delete m_in;
-        m_in = nullptr;
-    }
 }
 
 QStringList AudioEngine::discover_audio_devices(uint8_t d)
@@ -61,16 +51,31 @@ QStringList AudioEngine::discover_audio_devices(uint8_t d)
     QStringList list;
     QList<QAudioDevice> devices;
 
-    if(d){
+    if(d) {  // Fetch audio outputs (playback devices)
         devices = QMediaDevices::audioOutputs();
-    }
-    else{
+    } else {  // Fetch audio inputs (capture devices)
         devices = QMediaDevices::audioInputs();
     }
 
-    for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it ) {
-        list.append((*it).description());
+    for (const QAudioDevice &device : devices) {
+        QString description = device.description();
+
+        // Map device descriptions to friendly names
+        if (description.contains("com.apple.airpods")) {
+            list.append("AirPods");
+        } else if (description.contains("com.apple.avfoundation.avcapturedevice.built-in_audio")) {
+            list.append("Built-in Microphone");
+        } else if (description == "default") {
+            list.append("System Default");
+        } else if (description.contains("Bluetooth")) {
+            list.append("Bluetooth Device");
+        } else {
+            list.append(description);
+        }
     }
+
+    // Emit the signal to notify QML about the update
+   // emit audioDeviceListChanged();  // Ensure signal is emitted
 
     return list;
 }
@@ -84,106 +89,76 @@ void AudioEngine::init()
 
     m_agc = true;
 
-  
     QList<QAudioDevice> devices = QMediaDevices::audioOutputs();
-    if (devices.size() == 0) {
+    if(devices.size() == 0){
         qDebug() << "No audio playback hardware found";
-    } else {
-       
+    }
+    else{
         QAudioDevice device(QMediaDevices::defaultAudioOutput());
+        for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it ) {
 
-        for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it) {
             qDebug() << "Playback device name = " << (*it).description();
             qDebug() << (*it).supportedSampleFormats();
             qDebug() << (*it).preferredFormat();
 
-            if ((*it).description() == m_outputdevice) {
+            if((*it).description() == m_outputdevice){
                 device = *it;
             }
         }
-
         if (!device.isFormatSupported(format)) {
             qWarning() << "Raw audio format not supported by playback device";
         }
 
-        qDebug() << "Playback device: " << device.description() << " SR: " << format.sampleRate();
+        qDebug() << "Playback device: " << device.description() << "SR: " << format.sampleRate();
 
-        
         m_out = new QAudioSink(device, format, this);
         m_out->setBufferSize(1280);
         connect(m_out, SIGNAL(stateChanged(QAudio::State)), this, SLOT(handleStateChanged(QAudio::State)));
     }
 
-  
     devices = QMediaDevices::audioInputs();
 
-    if (devices.size() == 0) {
-        qDebug() << "No audio capture hardware found";
-    } else {
+    if(devices.size() == 0){
+        qDebug() <<  "No audio capture hardware found";
+    }
+    else{
         QAudioDevice device(QMediaDevices::defaultAudioInput());
-
-        for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it) {
-            if (MACHAK) {
+        for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it ) {
+            if(MACHAK){
                 qDebug() << "Playback device name = " << (*it).description();
                 qDebug() << (*it).supportedSampleFormats();
                 qDebug() << (*it).preferredFormat();
             }
-            if ((*it).description() == m_inputdevice) {
+            if((*it).description() == m_inputdevice){
                 device = *it;
             }
         }
-
         if (!device.isFormatSupported(format)) {
             qWarning() << "Raw audio format not supported by capture device";
         }
 
         int sr = 8000;
-        if (MACHAK) {
+        if(MACHAK){
             sr = device.preferredFormat().sampleRate();
             m_srm = (float)sr / 8000.0;
         }
         format.setSampleRate(sr);
         m_in = new QAudioSource(device, format, this);
-        qDebug() << "Capture device: " << device.description() << " SR: " << sr << " resample factor: " << m_srm;
+        qDebug() << "Capture device: " <<  device.description() << " SR: " << sr << " resample factor: " << m_srm;
     }
+
+    // Emit signal after initializing input and output devices
+    emit audioDeviceListChanged();
 }
 
-void AudioEngine::onAudioOutputChanged()
-{
-    qDebug() << "Audio output devices changed.";
-
- 
-    stop_playback();
-    if (m_out) {
-        delete m_out;
-        m_out = nullptr;
-    }
-
- 
-    QAudioDevice device(QMediaDevices::defaultAudioOutput());
-    QAudioFormat format;
-    format.setSampleRate(8000);
-    format.setChannelCount(1);
-    format.setSampleFormat(QAudioFormat::Int16);
-
-    if (!device.isFormatSupported(format)) {
-        qWarning() << "Raw audio format not supported by new playback device";
-    }
 
 
-    m_out = new QAudioSink(device, format, this);
-    m_out->setBufferSize(1280);
-    connect(m_out, SIGNAL(stateChanged(QAudio::State)), this, SLOT(handleStateChanged(QAudio::State)));
-
-    qDebug() << "Switched to new playback device: " << device.description();
-
-
-    start_playback();
-}
 
 void AudioEngine::start_capture()
 {
     m_audioinq.clear();
+   // setupAVAudioSession();
+    //setPreferredInputDevice();
     if(m_in != nullptr){
         m_indev = m_in->start();
         if(MACHAK) m_srm = (float)(m_in->format().sampleRate()) / 8000.0;
@@ -199,17 +174,22 @@ void AudioEngine::stop_capture()
     }
 }
 
-void AudioEngine::start_playback()
-{
+extern "C" void setupAVAudioSession();
+//extern "C" void setupPushKit();
+
+void AudioEngine::start_playback() {
     m_outdev = m_out->start();
+    qDebug() << "Playback started";
 }
+
 
 void AudioEngine::stop_playback()
 {
-    if (m_out != nullptr) {
-        m_out->reset();
-        m_out->stop();
-    }
+    //m_outdev->reset();
+    m_out->reset();
+    m_out->stop();
+    qDebug() << "AudioOut state Stop Playback";
+    
 }
 
 void AudioEngine::input_data_received()
@@ -217,6 +197,14 @@ void AudioEngine::input_data_received()
     QByteArray data = m_indev->readAll();
 
     if (data.size() > 0){
+/*
+        fprintf(stderr, "AUDIOIN: ");
+        for(int i = 0; i < len; ++i){
+            fprintf(stderr, "%02x ", (uint8_t)data.data()[i]);
+        }
+        fprintf(stderr, "\n");
+        fflush(stderr);
+*/
         if(MACHAK){
             std::vector<int16_t> samples;
             for(int i = 0; i < data.size(); i += 2){
@@ -237,14 +225,24 @@ void AudioEngine::input_data_received()
 void AudioEngine::write(int16_t *pcm, size_t s)
 {
     m_maxlevel = 0;
+/*
+    fprintf(stderr, "AUDIOOUT: ");
+    for(int i = 0; i < s; ++i){
+        fprintf(stderr, "%04x ", (uint16_t)pcm[i]);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+*/
     if(m_agc){
         process_audio(pcm, s);
     }
 
     size_t l = m_outdev->write((const char *) pcm, sizeof(int16_t) * s);
-
+    
+  
     if (l*2 < s){
         qDebug() << "AudioEngine::write() " << s << ":" << l << ":" << (int)m_out->bytesFree() << ":" << m_out->bufferSize() << ":" << m_out->error();
+    
     }
 
     for(uint32_t i = 0; i < s; ++i){
@@ -298,6 +296,7 @@ uint16_t AudioEngine::read(int16_t *pcm)
     return s;
 }
 
+// process_audio() based on code from DSD https://github.com/szechyjs/dsd
 void AudioEngine::process_audio(int16_t *pcm, size_t s)
 {
     float aout_abs, max, gainfactor, gaindelta, maxbuf;
@@ -388,21 +387,87 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
     }
 }
 
+QString AudioEngine::getFriendlyName(const QString& deviceIdentifier) {
+    if (deviceIdentifier == "default") {
+        return "System Default";
+    } else if (deviceIdentifier.contains("com.apple.airpods")) {
+        return "AirPods";
+    } else if (deviceIdentifier.contains("Bluetooth")) {
+        return "Bluetooth Device";
+    } else if (deviceIdentifier.contains("com.apple.avfoundation.avcapturedevice.built-in_audio")) {
+        return "Built-in Microphone";
+    } else if (deviceIdentifier.contains("com.apple.avfoundation.avcapturedevice.external_microphone")) {
+        return "External Microphone";
+    } else {
+        return deviceIdentifier; // Fallback to original identifier if no match is found
+    }
+}
+
+
+QString AudioEngine::mapFriendlyNameToDevice(const QString &friendlyName) {
+    if (friendlyName == "System Default") {
+        return "default";
+    } else if (friendlyName == "AirPods") {
+        return "com.apple.airpods";
+    } else if (friendlyName.contains("Bluetooth")) {
+        return "Bluetooth"; // General Bluetooth fallback
+    } else {
+        return friendlyName; // Return the original name if no mapping exists
+    }
+}
+
+
+void AudioEngine::setOutputDevice(const QString &deviceName) {
+    m_outputdevice = deviceName;
+    if (m_out != nullptr) {
+        stop_playback();
+        init(); // Reinitialize the audio with the new output device
+        start_playback();
+    }
+}
+
+void AudioEngine::setInputDevice(const QString &deviceName) {
+    m_inputdevice = deviceName;
+    if (m_in != nullptr) {
+        stop_capture();
+        init(); // Reinitialize the audio with the new input device
+        start_capture();
+    }
+}
+
+
 void AudioEngine::handleStateChanged(QAudio::State newState)
 {
+    static bool isSessionActive = false;
+
     switch (newState) {
     case QAudio::ActiveState:
-        //qDebug() << "AudioOut state active";
+        qDebug() << "AudioOut state active";
+        if (!isSessionActive) {
+            setupAVAudioSession();
+            isSessionActive = true;
+            setPreferredInputDevice();
+        }
         break;
+
     case QAudio::SuspendedState:
-        //qDebug() << "AudioOut state suspended";
+        qDebug() << "AudioOut state suspended";
         break;
+
     case QAudio::IdleState:
-        //qDebug() << "AudioOut state idle";
+        qDebug() << "AudioOut state idle, renewing background task...";
+      
+       setupBackgroundAudio();
+       //setPreferredInputDevice();
+          
+            
         break;
+
     case QAudio::StoppedState:
-        //qDebug() << "AudioOut state stopped";
+        qDebug() << "AudioOut state stopped";
+            
         break;
+
     default:
         break;
     }

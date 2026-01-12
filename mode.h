@@ -41,6 +41,7 @@ class Mode : public QObject
 public:
     Mode();
     ~Mode();
+    void reconnect();
     static Mode* create_mode(QString);
     void init(QString callsign, uint32_t dmrid, uint16_t nxdnid, char module, QString refname, QString host, int port, bool ipv6, QString vocoder, QString modem, QString audioin, QString audioout, bool mdirect);
     void set_modem_flags(bool rxInvert, bool txInvert, bool pttInvert, bool useCOSAsLockout, bool duplex)

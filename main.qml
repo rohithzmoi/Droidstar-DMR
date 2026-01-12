@@ -1,19 +1,19 @@
 /*
-	Original Copyright (C) 2019-2021 Doug McLain
-	Modification Copyright (C) 2024 Rohith Namboothiri
+    Copyright (C) 2019-2021 Doug McLain
+    Modified Copyright (C) 2024 Rohith Namboothiri
 
-	This program is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
 
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 import QtQuick
@@ -61,6 +61,10 @@ ApplicationWindow {
     id: fontAwesome
     source: "fontawesome-webfont.ttf"  // Update the path to your Font Awesome TTF file
 }
+
+
+
+  
 
 	TabBar {
 		id: bar
@@ -156,6 +160,7 @@ ApplicationWindow {
 
 		MainTab{
 			id: mainTab
+
 		}
 		SettingsTab{
 			id: settingsTab
@@ -175,35 +180,35 @@ ApplicationWindow {
    DroidStar {
         id: droidstar
     }
-    /*Connections {
+	
+	/*Connections {
 		target: Qt.application
 		function onStateChanged() {
 			if (Qt.application.state !== Qt.ApplicationActive) {
 				droidstar.reset_connect_status();
 			}
 		}
-    }*/
+	} */
 
-
-   Connections {
-       target: Qt.application
-       function onStateChanged() {
-           if (Qt.application.state === Qt.ApplicationSuspended) {
-               // Optional: add code here if you need to pause certain operations
-               console.log("Application is suspended");
-           } else if (Qt.application.state === Qt.ApplicationClosing) {
-               // Reset the connection only when the application is closing
-               droidstar.reset_connect_status();
-               console.log("Application is closing, resetting connection");
-           } else if (Qt.application.state === Qt.ApplicationActive) {
-               // Resume any operations when the app becomes active again
-               console.log("Application is active");
-           }
-       }
-   }
+  Connections {
+        target: Qt.application
+        onStateChanged: {
+            if (Qt.application.state === Qt.ApplicationSuspended) {
+                console.log("Application is suspended, starting background audio session");
+                //startBackgroundAudio();  // Call the exposed C++ function directly
+            } else if (Qt.application.state === Qt.ApplicationClosing) {
+                console.log("Application is closing, resetting connection");
+                droidstar.reset_connect_status();
+            } else if (Qt.application.state === Qt.ApplicationActive) {
+                console.log("Application is active, stopping background audio session");
+               // stopBackgroundAudio();  // Call the exposed C++ function directly
+            }
+        }
+    }
 
 
 
+	
     Connections {
         target: droidstar
 		Component.onCompleted: {
@@ -481,10 +486,10 @@ ApplicationWindow {
 			mainTab.data4.text = droidstar.get_data4();
 			mainTab.data5.text = droidstar.get_data5();
 			mainTab.data6.text = droidstar.get_data6();
-            //mainTab.ambestatus.text = droidstar.get_ambestatustxt();
-                        //mainTab.mmdvmstatus.text = droidstar.get_mmdvmstatustxt();
-            settingsTab.ambestatus.text = droidstar.get_ambestatustxt();
-            settingsTab.mmdvmstatus.text = droidstar.get_mmdvmstatustxt();
+			//mainTab.ambestatus.text = droidstar.get_ambestatustxt();
+			//mainTab.mmdvmstatus.text = droidstar.get_mmdvmstatustxt();
+			settingsTab.ambestatus.text = droidstar.get_ambestatustxt();
+			settingsTab.mmdvmstatus.text = droidstar.get_mmdvmstatustxt();
 			mainTab.netstatus.text = droidstar.get_netstatustxt();
 			++mainTab.uitimer.rxcnt;
         }
@@ -601,13 +606,12 @@ ApplicationWindow {
             }
 			if(c === 1){
 				mainTab.connectbutton.text = "Connecting";
-				mainTab.sliderMicGain.enabled = false;
 				mainTab.comboMode.enabled = false;
 				mainTab.comboHost.enabled = false;
 				if(mainTab.comboMode.currentText != "REF"){
 					mainTab.comboModule.enabled = false;
 				}
-
+				mainTab.sliderMicGain.enabled = false; 
             }
 			if(c === 2){
 				mainTab.connectbutton.text = "Disconnect";

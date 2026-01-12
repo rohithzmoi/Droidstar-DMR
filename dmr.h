@@ -1,6 +1,5 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
-    Modifications Copyright (C) 2024 Rohith Namboothiri
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,81 +21,17 @@
 #include "mode.h"
 #include "DMRDefines.h"
 #include "cbptc19696.h"
-#include <QObject>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QString>
-#include "SignalEmitter.h"
-#include <QTimer>
-
-
-
-class DroidStar;
-
-
 
 class DMR : public Mode
-
 {
     Q_OBJECT
-    
-    
-  // Q_PROPERTY(QString m_firstName READ getFirstName WRITE setFirstName NOTIFY firstNameChanged)
-   // Q_PROPERTY(QString m_firstName READ firstName WRITE setFirstName NOTIFY firstNameChanged)
-
-    
-
 public:
     DMR();
     ~DMR();
-    
-    //void setDroidStar(DroidStar *droidStar);
-   
-    //Q_INVOKABLE QString getFirstName() const { return m_firstName; }
-      //  void setFirstName(const QString &name);
-    //QString get_firstName() const;
-    
-   // Q_INVOKABLE void fetchFirstName(uint32_t srcId);
-
-   // Q_INVOKABLE   QString firstName() const;
-   // Q_INVOKABLE  void setFirstName(const QString &name);
-    
-    
-    
-    
-    //QString firstName() const;
-     // void setFirstName(const QString &name);
-    //QString get_firstName() const;
-    
-    //Q_INVOKABLE void fetchFirstName(uint32_t srcId);
-    
     void set_dmr_params(uint8_t essid, QString password, QString lat, QString lon, QString location, QString desc, QString freq, QString url, QString swid, QString pkid, QString options);
     uint8_t * get_eot();
-    
-    
-    //QString firstName() const;  // Getter
-        //void setFirstName(const QString &name);  // Setter
-
-        //void fetchFirstName(uint32_t srcId);
-
-    signals:
-        //void firstNameChanged();  // Notifier for Q_PROPERTY
-
-        //void firstNameReceived(const QString &firstName);
-       // void firstNameChanged(const QString &name);
-       
-
-    
-
 private slots:
     void process_udp();
-   // void onNetworkReply(QNetworkReply *reply); //
-    //void fetchFirstName(int dmrId);//
-    //void handleFirstName(const QString &firstName);  // Declare the slot here
-
     void process_rx_data();
     void process_modem_data(QByteArray);
     void get_ambe();
@@ -111,11 +46,6 @@ private slots:
     void send_frame();
 private:
     uint32_t m_essid;
-    //QNetworkAccessManager* networkManager;
-    //SignalEmitter *signalEmitter;
-   
-    //void fetchFirstName(uint32_t srcId);
-    //QString m_firstName; // Declare m_firstName
     QString m_password;
     QString m_lat;
     QString m_lon;
@@ -128,7 +58,6 @@ private:
     uint32_t m_txsrcid;
     uint32_t m_txdstid;
     uint32_t m_txstreamid;
-    uint32_t m_currentSrcId; //for fetching handle
     uint8_t m_txslot;
     uint8_t m_txcc;
     uint8_t packet_size;
@@ -142,7 +71,6 @@ private:
     bool m_raw[128U];
     bool m_data[72U];
     QString m_options;
-    //QString m_firstName;
 
     void byteToBitsBE(uint8_t byte, bool* bits);
     void bitsToByteBE(const bool* bits, uint8_t& byte);
@@ -162,6 +90,5 @@ private:
     void addDMRAudioSync(uint8_t* data, bool duplex);
     void setup_connection();
 };
-
 
 #endif // DMR_H

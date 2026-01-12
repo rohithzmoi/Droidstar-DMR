@@ -1,7 +1,6 @@
 /*
-
+    
     Copyright (C) 2024 Rohith Namboothiri
-
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -16,6 +15,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Dialogs
@@ -25,89 +25,169 @@ Item {
     width: 400
     height: 600
 
- property MainTab mainTab: null
+    property MainTab mainTab: null  // This is correctly set from main.qml
     property int dmrID: -1
     property int tgid: -1
     property string logFileName: "logs.json"
     property string savedFilePath: ""
+    //property int latestSerialNumber: 0  // Track the latest serial number
     property int latestSerialNumber: 0
     property bool isLoading: true
 
+    // Signals to update MainTab
+    signal firstRowDataChanged(string serialNumber, string callsign, string handle, string country)
+    signal secondRowDataChanged(string serialNumber, string callsign, string handle, string country)
 
 
-       signal firstRowDataChanged(string serialNumber, string callsign, string handle, string country)
-       signal secondRowDataChanged(string serialNumber, string callsign, string handle, string country)
+    // Declare a global XMLHttpRequest object for reuse
+    property var xhr: XMLHttpRequest
+
+    Component.onCompleted: {
+        // Initialize the XMLHttpRequest object
+        xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === XMLHttpRequest.DONE) {
+                if (xhr.status === 200) {
+
+                    var response;
+                    try {
+                        response = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        console.error("Failed to parse JSON:", e, "Raw:", xhr.responseText);
+                        return;
+                    }
+
+                    // Expected response shape (as per your latest example):
+                    // {
+                    //   "count": 1,
+                    //   "page": 1,
+                    //   "pages": 1,
+                    //   "per_page": 200,
+                    //   "results": [
+                    //     { "callsign":"...", "country":"...", "name":"...", "radio_id":123, ... }
+                    //   ]
+                    // }
+                    if (response && response.count > 0 && response.results && response.results.length > 0) {
+                        var result = response.results[0];
+                        var data = {
+                            callsign: result.callsign,
+                            dmrID: result.radio_id,  // IMPORTANT: radio_id is the DMR ID
+                            tgid: qsoTab.tgid,  // Include TGID in the data object
+                            country: result.country,
+                            fname: result.name,  // Map "name" into existing "fname" field used everywhere in this QML
+                            currentTime: Qt.formatDateTime(new Date(), "yyyy-MM-dd HH:mm:ss")  // Current local time
+                        };
+                        addEntry(data);
+                    } else {
+                        console.error("No results found in response:", JSON.stringify(response));
+                    }
+                } else {
+                    console.error("Failed to fetch data. Status:", xhr.status, "Response:", xhr.responseText);
+                }
+            }
+        };
+        xhr.ontimeout = function() {
+            console.error("The request for fetching data timed out.");
+        };
+
+        xhr.timeout = 5000; // Set a timeout for the request
+
+        // Other initial setup
+        mainTab.dataUpdated.connect(onDataUpdated);
+        updateRowData(); // Ensure both rows are updated initially
+        loadSettings();
+        if (mainTab === null) {
+            console.error("mainTab is null. Ensure it is passed correctly from the parent.");
+        }
+    }
+
+
 
     ListModel {
         id: logModel
     }
 
-
     // Update the first and second row data in a single function
-       function updateRowData() {
-           if (logModel.count > 0) {
-               var firstRow = logModel.get(0);
-               firstRowDataChanged(firstRow.serialNumber, firstRow.callsign, firstRow.fname, firstRow.country);
-           } else {
-               firstRowDataChanged("N/A", "N/A", "N/A", "N/A");
-           }
+    function updateRowData() {
+        if (logModel.count > 0) {
+            var firstRow = logModel.get(0);
+            firstRowDataChanged(firstRow.serialNumber, firstRow.callsign, firstRow.fname, firstRow.country);
+        } else {
+            firstRowDataChanged("N/A", "N/A", "N/A", "N/A");
+        }
 
-           if (logModel.count > 1) {
-               var secondRow = logModel.get(1);
-               secondRowDataChanged(secondRow.serialNumber, secondRow.callsign, secondRow.fname, secondRow.country);
-           } else {
-               secondRowDataChanged("N/A", "N/A", "N/A", "N/A");
-           }
-       }
-
-       // Connections to update row data whenever the model changes
-      Connections {
-       target: logModel
-       onCountChanged: {
-           updateRowData();
-       }
-   }
-
-          Component.onCompleted: {
-              mainTab.dataUpdated.connect(onDataUpdated);
-              updateRowData();
-              loadSettings();
-              if (mainTab === null) {
-                  console.error("mainTab is null. Ensure it is passed correctly from the parent.");
-              }
-          }
+        if (logModel.count > 1) {
+            var secondRow = logModel.get(1);
+            secondRowDataChanged(secondRow.serialNumber, secondRow.callsign, secondRow.fname, secondRow.country);
+        } else {
+            secondRowDataChanged("N/A", "N/A", "N/A", "N/A");
+        }
+    }
 
 
-          function saveSettings() {
-               var logData = [];
-               for (var i = 0; i < logModel.count; i++) {
-                   logData.push(logModel.get(i));
-               }
-               logHandler.saveLog(logFileName, logData);
-           }
+   /*
+    // Component onCompleted: Initial setup
+    Component.onCompleted: {
+        mainTab.dataUpdated.connect(onDataUpdated);
+        updateRowData(); // Ensure both rows are updated initially
+        loadSettings();
+        if (mainTab === null) {
+            console.error("mainTab is null. Ensure it is passed correctly from the parent.");
+        }
+    }*/
 
-          function loadSettings() {
-              isLoading = true;
-           var savedData = logHandler.loadLog(logFileName);
-           for (var i = 0; i < savedData.length; i++) {
-               savedData[i].checked = false;
-               logModel.append(savedData[i]);
-               latestSerialNumber = Math.max(latestSerialNumber, savedData[i].serialNumber + 1);
-              
-           }
-           isLoading = false;
-       }
+    /*
+
+   function loadSettings() {
+    var savedData = logHandler.loadLog(logFileName);
+    for (var i = 0; i < savedData.length; i++) {
+        savedData[i].checked = false;
+        logModel.append(savedData[i]);
+        latestSerialNumber = Math.max(latestSerialNumber, savedData[i].serialNumber + 1);
+    }
+        isLoading = false; // Reset the flag after loading is complete
+} */
+
+    function loadSettings() {
+        var savedData = logHandler.loadLog(logFileName);
+        for (var i = 0; i < savedData.length; i++) {
+            savedData[i].checked = false;
+            logModel.append(savedData[i]);
+            latestSerialNumber = Math.max(latestSerialNumber, savedData[i].serialNumber + 1);
+        }
+        isLoading = false; // Reset the flag after loading is complete
+    }
+
+    function saveSettings() {
+        var logData = [];
+        for (var i = 0; i < logModel.count; i++) {
+            logData.push(logModel.get(i));
+        }
+        logHandler.saveLogAsync(logFileName, logData);
+    }
+
+    // Connections to update row data whenever the model changes
+    Connections {
+        target: logModel
+        onCountChanged: {
+            updateRowData();
+
+
+        }
+    }
+
 
     function clearSettings() {
         logModel.clear();
         logHandler.clearLog(logFileName);
-        latestSerialNumber = 0;
+        latestSerialNumber = 0;  // Reset the serial number counter to 0
     }
 
     function exportLog() {
-        saveFileNameDialog.open(); 
+        saveFileNameDialog.open(); // Prompt for file name
     }
 
+    // Header Row with Text and Clear Button
     Text {
         id: headerText
         text: "This page logs lastheard stations in descending order. An upgrade to a native Log book is coming soon."
@@ -126,17 +206,18 @@ Item {
         x: 20
         y: headerText.y + headerText.height + 12
         onClicked: {
-            clearSettings()
+            clearSettings();
+
         }
 
         background: Rectangle {
-            color: "red"  
-            radius: 4  
+            color: "red"  // Set the background color to red
+            radius: 4  // Optional: Add some rounding to the corners
         }
 
         contentItem: Text {
             text: clearButton.text
-            color: "white" 
+            color: "white"  // Set text color to white for contrast
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             anchors.centerIn: parent
@@ -144,7 +225,7 @@ Item {
         }
     }
 
-   
+    // Add an Export button
     Button {
         id: exportButton
         text: "Export Log"
@@ -153,13 +234,13 @@ Item {
         onClicked: exportLog()
 
         background: Rectangle {
-            color: "green"  
-            radius: 4  
+            color: "green"  // Set the background color to green
+            radius: 4  // Optional: Add some rounding to the corners
         }
 
         contentItem: Text {
             text: exportButton.text
-            color: "white"  
+            color: "white"  // Set text color to white for contrast
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             anchors.centerIn: parent
@@ -167,28 +248,31 @@ Item {
         }
     }
 
-
-   
+    // Clone the button using properties from mainTab's buttonTX
     Button {
         id: clonedButton
         visible: mainTab.buttonTX.visible
         enabled: mainTab.buttonTX.enabled
         x: exportButton.x + exportButton.width + 10
         y: exportButton.y
-        width: exportButton.width * 1.5  
+        width: exportButton.width * 1.5  // Increase width to accommodate more text
         height: exportButton.height
         background: Rectangle {
             color: mainTab.buttonTX.tx ? "#800000" : "steelblue"
             radius: 4
 
-           
-            Text {
-                id: clonedText
+            Column {
                 anchors.centerIn: parent
-                font.pointSize: 20  
-                text: mainTab.buttonTX.tx ? "TX" : "TX"
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
+                spacing: 2  // Add some spacing between the texts
+
+                Text {
+                    id: clonedText
+                    font.pointSize: 20  // Adjust font size as needed
+                    text: qsTr("TX")  // Display "TX"
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
             }
         }
 
@@ -198,8 +282,6 @@ Item {
         onReleased: mainTab.buttonTX.released()
         onCanceled: mainTab.buttonTX.canceled()
     }
-
-
 
 
     // Dialog to prompt for file name
@@ -233,11 +315,16 @@ Item {
         }
 
         onAccepted: {
-            var fileName = fileNameInput.text.trim();
+
+
+            var fileName = fileNameInput.text.trim(); // Trim any leading or trailing whitespace
+
             if (fileName === "") {
-                      errorDialog.open(); // Show error dialog if the file name is empty
-                      return; // Prevent further execution
-                  }
+                errorDialog.open(); // Show error dialog if the file name is empty
+                return; // Prevent further execution
+            }
+
+
             var logData = [];
             var hasSelection = false;
             for (var i = 0; i < logModel.count; i++) {
@@ -254,7 +341,7 @@ Item {
                 }
             }
 
-
+            //var fileName = fileNameInput.text;
             var filePath = logHandler.getDSLogPath() + "/" + fileName;
 
             if (csvRadioButton.checked) {
@@ -282,42 +369,61 @@ Item {
     }
 
     // Error Dialog to show if file name is empty
-   
-// Error Dialog to show if file name is empty
-Dialog {
-    id: errorDialog
-    title: "Error"
-    standardButtons: Dialog.Ok
-    modal: true
-    width: 300 
-
-    contentItem: Text {
-        text: "Empty/Invalid File Name."
-        wrapMode: Text.WordWrap
-        color: "red"
-        width: parent.width * 0.9 
-    }
-}
-
-
-/* 
-//Binding loop Error
-Dialog {
+    Dialog {
         id: errorDialog
         title: "Error"
         standardButtons: Dialog.Ok
         modal: true
+        width: 300 // Set a fixed width for the dialog to avoid binding loops
 
         contentItem: Text {
             text: "Empty/Invalid File Name."
             wrapMode: Text.WordWrap
             color: "red"
-            width: parent.width * 0.9
+            width: parent.width * 0.9 // Relative width to parent, now parent has a fixed width
         }
     }
-*/
 
-// Dialog to show that the file was saved
+
+
+    // Dialog to show that the file was saved
+    /*
+    Dialog {
+        id: fileSavedDialog
+        title: "File Saved"
+        standardButtons: Dialog.Ok
+        width: 300  // Set a fixed width for the dialog to avoid binding loops
+
+
+            Button {
+    text: "Share"
+    onClicked: {
+        // Ensure you are not passing extra arguments here
+        logHandler.shareFile();
+    }
+}
+
+        onAccepted: {
+            console.log("File saved successfully!");
+        }
+
+        background: Rectangle {
+            color: "#80c342"
+            radius: 8  // Optional: Add rounded corners
+        }
+
+        contentItem: Text {
+            text: "File saved successfully to " + savedFilePath
+            font.pointSize: 14
+            color: "black"
+            wrapMode: Text.WordWrap  // Enable text wrapping
+            width: parent.width * 0.9  // Ensure some padding from the edges
+        }
+
+
+    }*/
+
+    // Dialog to show that the file was saved
     Dialog {
         id: fileSavedDialog
         title: "File Saved"
@@ -358,7 +464,7 @@ Dialog {
                 Button {
                     text: "Share"
                     onClicked: {
-                        logHandler.shareFile(savedFilePath);
+                        logHandler.shareFile();
                     }
                 }
             }
@@ -369,9 +475,9 @@ Dialog {
     Row {
         id: tableHeader
         width: parent.width
-        height: 25  
+        height: 25  // Make the rectangles slightly smaller in height
         y: clearButton.y + clearButton.height + 10
-        spacing: 4
+        spacing: 4 // Reduce spacing slightly
 
         Rectangle {
             width: parent.width / 8
@@ -381,7 +487,7 @@ Dialog {
                 anchors.centerIn: parent
                 text: "Sr.No"
                 font.bold: true
-                font.pixelSize: 12  
+                font.pixelSize: 12  // Smaller font size
             }
         }
         Rectangle {
@@ -392,7 +498,7 @@ Dialog {
                 anchors.centerIn: parent
                 text: "Callsign"
                 font.bold: true
-                font.pixelSize: 12  
+                font.pixelSize: 12  // Smaller font size
             }
         }
         Rectangle {
@@ -403,7 +509,7 @@ Dialog {
                 anchors.centerIn: parent
                 text: "DMR ID"
                 font.bold: true
-                font.pixelSize: 12  
+                font.pixelSize: 12  // Smaller font size
             }
         }
         Rectangle {
@@ -414,7 +520,7 @@ Dialog {
                 anchors.centerIn: parent
                 text: "TGID"
                 font.bold: true
-                font.pixelSize: 12  
+                font.pixelSize: 12  // Smaller font size
             }
         }
         Rectangle {
@@ -425,7 +531,7 @@ Dialog {
                 anchors.centerIn: parent
                 text: "Handle"
                 font.bold: true
-                font.pixelSize: 12 
+                font.pixelSize: 12  // Smaller font size
             }
         }
         Rectangle {
@@ -436,12 +542,12 @@ Dialog {
                 anchors.centerIn: parent
                 text: "Country"
                 font.bold: true
-                font.pixelSize: 12  
+                font.pixelSize: 12  // Smaller font size
             }
         }
     }
 
-  
+    // The TableView for the rows
     TableView {
         id: tableView
         x: 0
@@ -453,13 +559,13 @@ Dialog {
         delegate: Rectangle {
             width: tableView.width
             implicitWidth: tableView.width
-            implicitHeight: 100 
+            implicitHeight: 100  // Adjust the height to accommodate the checkbox and time text
             height: implicitHeight
-            color: checkBox.checked ? "#b9fbd7" : (index % 2 === 0 ? "lightgrey" : "white")  
+            color: checkBox.checked ? "#b9fbd7" : (index % 2 === 0 ? "lightgrey" : "white")  // Changes color when checked
 
             Row {
                 width: parent.width
-                height: 40  
+                height: 40  // Set a fixed height for the row
 
                 Rectangle {
                     width: parent.width / 8
@@ -467,7 +573,7 @@ Dialog {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: serialNumber  
+                        text: serialNumber  // Using direct access to model properties
                         font.pixelSize: 12
                     }
                 }
@@ -477,7 +583,7 @@ Dialog {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: callsign 
+                        text: callsign  // Using direct access to model properties
                         font.pixelSize: 12
                     }
                 }
@@ -487,7 +593,7 @@ Dialog {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: dmrID  
+                        text: dmrID  // Using direct access to model properties
                         font.pixelSize: 12
                     }
                 }
@@ -497,7 +603,7 @@ Dialog {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: tgid  
+                        text: tgid  // Using direct access to model properties
                         font.pixelSize: 12
                     }
                 }
@@ -507,7 +613,7 @@ Dialog {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: fname  
+                        text: fname  // Using direct access to model properties
                         font.pixelSize: 12
                     }
                 }
@@ -517,12 +623,11 @@ Dialog {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: country 
+                        text: country  // Using direct access to model properties
                         font.pixelSize: 12
                     }
                 }
             }
-
 
             Row {
                 width: parent.width - 20
@@ -550,59 +655,59 @@ Dialog {
 
 
                 Text {
-                               id: menuIcon
-                               text: "\uf0c9"  
-                               font.family: "FontAwesome"
-                               font.pixelSize: 20
-                               anchors.verticalCenter: parent.verticalCenter
-                               color: "black"
-                               MouseArea {
-                                   anchors.fill: parent
-                                   onClicked: {
-                                       if (contextMenu.visible) {
-                                           contextMenu.close();
-                                       } else {
-                                           contextMenu.x = menuIcon.x + menuIcon.width
-                                                           contextMenu.y = menuIcon.y
-                                                           contextMenu.open()
-                                       }
-                                   }
-                               }
-                           }
-                       }
+                    id: menuIcon
+                    text: "\uf0c9"  // FontAwesome icon for bars (hamburger menu)
+                    font.family: "FontAwesome"
+                    font.pixelSize: 20
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            if (contextMenu.visible) {
+                                contextMenu.close();
+                            } else {
+                                contextMenu.x = menuIcon.x + menuIcon.width
+                                contextMenu.y = menuIcon.y
+                                contextMenu.open()
+                            }
+                        }
+                    }
+                }
+            }
 
-                       Menu {
-                           id: contextMenu
-                           title: "Lookup Options"
-                           visible: false 
-                           MenuItem {
-                               text: "Lookup QRZ"
-                               onTriggered: Qt.openUrlExternally("https://qrz.com/lookup/" + model.callsign)
-                           }
-                           MenuItem {
-                               text: "Lookup BM"
-                               onTriggered: Qt.openUrlExternally("https://brandmeister.network/index.php?page=profile&call=" + model.callsign)
-                           }
-                           MenuItem {
-                               text: "Lookup APRS"
-                               onTriggered: Qt.openUrlExternally("https://aprs.fi/#!call=a%2F" + model.callsign)
-                           }
-                          // onClosed: visible = false
+            Menu {
+                id: contextMenu
+                title: "Lookup Options"
+                visible: false  // Ensure it's not visible by default
+                MenuItem {
+                    text: "Lookup QRZ"
+                    onTriggered: Qt.openUrlExternally("https://qrz.com/lookup/" + model.callsign)
+                }
+                MenuItem {
+                    text: "Lookup BM"
+                    onTriggered: Qt.openUrlExternally("https://brandmeister.network/index.php?page=profile&call=" + model.callsign)
+                }
+                MenuItem {
+                    text: "Lookup APRS"
+                    onTriggered: Qt.openUrlExternally("https://aprs.fi/#!call=a%2F" + model.callsign)
+                }
+                // onClosed: visible = false
 
-                       }
-                   }
-               }
+            }
+        }
+    }
 
     function onDataUpdated(receivedDmrID, receivedTGID) {
         console.log("Received dmrID:", receivedDmrID, "and TGID:", receivedTGID);
-        qsoTab.dmrID = receivedDmrID;  
-        qsoTab.tgid = receivedTGID;    
+        qsoTab.dmrID = receivedDmrID;  // Correctly scope the dmrID assignment
+        qsoTab.tgid = receivedTGID;    // Set the TGID in qsoTab
         fetchData(receivedDmrID, receivedTGID);
     }
 
-    function fetchData(dmrID, tgid) {
+    /*  function fetchData(dmrID, tgid) {
         var xhr = new XMLHttpRequest();
-        xhr.open("GET", "https://radioid.net/api/dmr/user/?id=" + dmrID, true);
+        xhr.open("GET", "https://radioid.net/api/users?id=" + dmrID, true);
         xhr.onreadystatechange = function() {
             if (xhr.readyState === XMLHttpRequest.DONE) {
                 if (xhr.status === 200) {
@@ -612,7 +717,7 @@ Dialog {
                         var data = {
                             callsign: result.callsign,
                             dmrID: result.id,
-                            tgid: tgid, 
+                            tgid: tgid,  // Include TGID in the data object
                             country: result.country,
                             fname: result.fname,
                             currentTime: Qt.formatDateTime(new Date(), "yyyy-MM-dd HH:mm:ss")  // Current local time
@@ -626,41 +731,61 @@ Dialog {
         };
         xhr.send();
     }
+*/
+
+
+    function fetchData(dmrID, tgid) {
+        // Reuse the XMLHttpRequest object
+        xhr.open("GET", "https://radioid.net/api/users?id=" + dmrID, true);
+        xhr.setRequestHeader("Connection", "keep-alive"); // Set Keep-Alive header
+        xhr.send();
+    }
+
 
     function addEntry(data) {
-            console.log("Processing data in QsoTab:", JSON.stringify(data));
+        console.log("Processing data in QsoTab:", JSON.stringify(data));
 
-            if (!data || typeof data !== 'object') {
-                console.error("Invalid data received:", data);
-                return;
-            }
-
-          
-            if (data.country === "United States") {
-                data.country = "USA";
-            } else if (data.country === "United Kingdom") {
-                data.country = "UK";
-            }
-
-            latestSerialNumber += 1;
-            isLoading = false;
-
-           
-            logModel.insert(0, {
-                serialNumber: latestSerialNumber,
-                callsign: data.callsign,
-                dmrID: data.dmrID,
-                tgid: data.tgid,
-                country: data.country,
-                fname: data.fname,
-                currentTime: data.currentTime,
-                checked: false
-            });
-
-            saveSettings();
-            const maxEntries = 250;
-            while (logModel.count > maxEntries) {
-                logModel.remove(logModel.count - 1);  
-            }
+        if (!data || typeof data !== 'object') {
+            console.error("Invalid data received:", data);
+            return;
         }
+        isLoading = false;
+        // Increment the latest serial number
+        //latestSerialNumber += 1;
+
+        // Check and update the country field
+        if (data.country === "United States") {
+            data.country = "USA";
+        } else if (data.country === "United Kingdom") {
+            data.country = "UK";
+        }
+
+
+
+        // Insert the new entry with the next serial number
+        logModel.insert(0, {
+            serialNumber: latestSerialNumber,
+            callsign: data.callsign,
+            dmrID: data.dmrID,
+            tgid: data.tgid,
+            country: data.country,
+            fname: data.fname,
+            currentTime: data.currentTime,
+            checked: false
+        });
+
+
+        latestSerialNumber += 1; // Increment for the next entry
+
+        // Save the updated log
+        saveSettings();
+
+
+        // Ensure that the log doesn't exceed the maximum number of entries
+        const maxEntries = 250;
+        while (logModel.count > maxEntries) {
+            logModel.remove(logModel.count - 1);  // Remove the oldest entry
+        }
+
     }
+}

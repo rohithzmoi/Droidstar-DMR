@@ -1,35 +1,13 @@
-/*
-    Copyright (C) 2024 Rohith Namboothiri
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program. If not, see <https://www.gnu.org/licenses/>.
-*/
-
-
 #include "LogHandler.h"
 #include <QDir>
 #include <QDebug>
 #include <QTextStream>
+#include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QStandardPaths>
-#include <QFileInfo>
-
-#ifdef Q_OS_ANDROID
-#include <QtCore/QJniObject>
-#include <QtCore/QCoreApplication>
-#endif
+#include <QDesktopServices>
+#include <QtConcurrent> // Include for running asynchronous tasks
 
 LogHandler::LogHandler(QObject *parent) : QObject(parent)
 {
@@ -48,15 +26,30 @@ QString LogHandler::getFilePath(const QString &fileName) const
     }
 
     QString filePath = dirPath + "/" + fileName;
-    qDebug() << "Log file path:" << filePath;  // Log the file path
+    qDebug() << "Log file path:" << filePath;
     return filePath;
+}
+
+void LogHandler::saveLogAsync(const QString &fileName, const QJsonArray &logData)
+{
+    QtConcurrent::run([this, fileName, logData]() {
+        saveLog(fileName, logData);
+    });
+}
+
+void LogHandler::loadLogAsync(const QString &fileName, std::function<void(QJsonArray)> callback)
+{
+    QtConcurrent::run([this, fileName, callback]() {
+        QJsonArray logData = loadLog(fileName);
+        callback(logData);
+    });
 }
 
 bool LogHandler::saveLog(const QString &fileName, const QJsonArray &logData)
 {
     QString filePath = getFilePath(fileName);
     if (filePath.isEmpty()) {
-        return false;  // Failed to create directory, so return false
+        return false;
     }
 
     QFile file(filePath);
@@ -64,6 +57,7 @@ bool LogHandler::saveLog(const QString &fileName, const QJsonArray &logData)
         qDebug() << "Failed to open file for writing:" << file.errorString();
         return false;
     }
+
     QJsonDocument doc(logData);
     file.write(doc.toJson());
     file.close();
@@ -79,7 +73,7 @@ QJsonArray LogHandler::loadLog(const QString &fileName)
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
         qDebug() << "Failed to open file for reading:" << file.errorString();
-        return logData;  // Return empty array if the file can't be opened
+        return logData;
     }
 
     QByteArray data = file.readAll();
@@ -108,13 +102,14 @@ bool LogHandler::clearLog(const QString &fileName)
     return false;
 }
 
-QString LogHandler::getDSLogPath() const {
-    QString externalStoragePath = "/storage/emulated/0/Download";
-    QString dsLogPath = externalStoragePath + "/DSLog";
+QString LogHandler::getDSLogPath() const
+{
+    QString documentsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    QString dsLogPath = documentsPath + "/DSLog";
     QDir dsLogDir(dsLogPath);
 
-    qDebug() << "External storage path: " << externalStoragePath;  // Debugging line
-    qDebug() << "DSLog path: " << dsLogPath;  // Debugging line
+    qDebug() << "Documents path: " << documentsPath;
+    qDebug() << "DSLog path: " << dsLogPath;
 
     if (!dsLogDir.exists()) {
         if (!dsLogDir.mkpath(dsLogPath)) {
@@ -130,14 +125,14 @@ QString LogHandler::getDSLogPath() const {
     return dsLogPath;
 }
 
-bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logData) {
+bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logData)
+{
     QString dsLogPath = getDSLogPath();
     if (dsLogPath.isEmpty()) {
         qDebug() << "DSLog path is not available.";
         return false;
     }
 
-    // Ensure that only the filename is appended to the directory path
     QString filePath = dsLogPath + "/" + QFileInfo(fileName).fileName();
 
     qDebug() << "Attempting to save file at: " << filePath;
@@ -150,10 +145,8 @@ bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logDa
 
     QTextStream out(&file);
 
-    // Write the CSV headers
     out << "Sr.No,Callsign,DMR ID,TGID,Handle,Country,Time\n";
 
-    // Write the log data to the CSV file
     for (int i = 0; i < logData.size(); ++i) {
         QJsonObject entry = logData[i].toObject();
         out << entry["serialNumber"].toInt() << ","
@@ -167,17 +160,19 @@ bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logDa
 
     file.close();
     qDebug() << "Log exported successfully to" << filePath;
+    lastSavedFilePath = filePath;
     return true;
 }
 
-bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logData) {
+bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logData)
+{
     QString dsLogPath = getDSLogPath();
     if (dsLogPath.isEmpty()) {
         qDebug() << "DSLog path is not available.";
         return false;
     }
 
-    QString filePath = dsLogPath + "/" + QFileInfo(fileName).fileName(); // Ensure the file name is properly handled
+    QString filePath = dsLogPath + "/" + QFileInfo(fileName).fileName();
 
     qDebug() << "Attempting to save ADIF file at: " << filePath;
 
@@ -189,15 +184,12 @@ bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logD
 
     QTextStream out(&file);
 
-    // Write the ADIF headers
     out << "ADIF Export\n";
-    out << "<EOH>\n";  // End of Header
+    out << "<EOH>\n";
 
-    // Write each QSO record in ADIF format
     for (int i = 0; i < logData.size(); ++i) {
         QJsonObject entry = logData[i].toObject();
 
-        // Extract and format date and time
         QString currentTime = entry["currentTime"].toString();
         QString qsoDate = currentTime.left(10).remove('-'); // Format: YYYYMMDD
         QString timeOn = currentTime.mid(11, 8).remove(':'); // Format: HHMMSS
@@ -206,8 +198,8 @@ bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logD
         out << "<CALL:" << entry["callsign"].toString().length() << ">" << entry["callsign"].toString();
         out << "<BAND:4>70CM";  // Band is hardcoded as "70CM"
         out << "<MODE:12>DIGITALVOICE";    // Mode is set to "DIGITALVOICE"
-        // Include the first name in the ADIF record
         out << "<NAME:" << entry["fname"].toString().length() << ">" << entry["fname"].toString();
+
         out << "<QSO_DATE:" << qsoDate.length() << ">" << qsoDate;
         out << "<TIME_ON:6>" << timeOn;
         out << "<EOR>\n";  // End of Record
@@ -215,64 +207,31 @@ bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logD
 
     file.close();
     qDebug() << "Log exported successfully to" << filePath;
+    lastSavedFilePath = filePath;
     return true;
 }
 
-
 // Extract and display a user-friendly path
 QString LogHandler::getFriendlyPath(const QString &fullPath) const {
-    return fullPath.mid(fullPath.indexOf("/Download/"));
+    return fullPath.mid(fullPath.indexOf("/Documents/"));
 }
 
-void LogHandler::shareFile(const QString &filePath) {
+void LogHandler::shareFile() {
 #ifdef Q_OS_IOS
-    shareFileOnIOS(filePath); // iOS-specific sharing method
-#elif defined(Q_OS_ANDROID)
-    shareFileDirectly(filePath); // Android-specific sharing method
+    if (lastSavedFilePath.isEmpty()) {
+        qDebug() << "No file has been saved to share.";
+        return;
+    }
+
+    QFileInfo fileInfo(lastSavedFilePath);
+    if (!fileInfo.exists()) {
+        qDebug() << "File does not exist: " << lastSavedFilePath;
+        return;
+    }
+
+    // Use iOS-specific code to present the share sheet
+    shareFileOnIOS(lastSavedFilePath);
 #else
-    qWarning("File sharing is only implemented for iOS and Android.");
+    qDebug() << "Share functionality is only implemented for iOS.";
 #endif
 }
-void LogHandler::shareFileDirectly(const QString &filePath) {
-    QJniObject context = QNativeInterface::QAndroidApplication::context();
-
-    if (context.isValid()) {
-        QString relativeFilePath = filePath.section("Download/", 1);
-        QJniObject javaFile("java/io/File", "(Ljava/lang/String;)V", QJniObject::fromString("/storage/emulated/0/Download/" + relativeFilePath).object<jstring>());
-
-        if (javaFile.isValid()) {
-            QString authority = "com.dmr.droidstardmr.fileprovider"; 
-            QJniObject authorityObject = QJniObject::fromString(authority);
-            QJniObject fileUri = QJniObject::callStaticObjectMethod(
-                "androidx/core/content/FileProvider",
-                "getUriForFile",
-                "(Landroid/content/Context;Ljava/lang/String;Ljava/io/File;)Landroid/net/Uri;",
-                context.object(),
-                authorityObject.object<jstring>(),
-                javaFile.object()
-                );
-
-            if (fileUri.isValid()) {
-                QJniObject shareIntent("android/content/Intent", "(Ljava/lang/String;)V", QJniObject::fromString("android.intent.action.SEND").object());
-                shareIntent.callObjectMethod("setType", "(Ljava/lang/String;)Landroid/content/Intent;", QJniObject::fromString("text/csv").object());
-                shareIntent.callObjectMethod("putExtra", "(Ljava/lang/String;Landroid/os/Parcelable;)Landroid/content/Intent;", QJniObject::fromString("android.intent.extra.STREAM").object(), fileUri.object());
-
-                shareIntent.callMethod<void>("addFlags", "(I)V", jint(1));
-
-                context.callObjectMethod("startActivity", "(Landroid/content/Intent;)V", QJniObject::callStaticObjectMethod(
-                                                                                             "android/content/Intent", "createChooser",
-                                                                                             "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;",
-                                                                                             shareIntent.object(),
-                                                                                             QJniObject::fromString("Share File").object()
-                                                                                             ).object());
-            } else {
-                qWarning("Failed to obtain file URI for sharing.");
-            }
-        } else {
-            qWarning("Failed to create java.io.File object.");
-        }
-    } else {
-        qWarning("Invalid context or file path object.");
-    }
-}
-

@@ -1,0 +1,4 @@
+module DroidStar.LiveActivity
+plugin liveactivityplugin
+classname LiveActivityPlugin
+typeinfo LiveActivityPlugin.qmltypes

@@ -1,0 +1,19 @@
+framework module DroidStar {
+    umbrella header "DroidStar-Bridging-Header.h"
+    
+    export *
+    module * { export * }
+    
+    // Explicitly declare the LiveActivityManager class
+    explicit objc class LiveActivityManager {
+        + (instancetype)shared;
+        + (BOOL)isDynamicIslandAvailable;
+        - (void)startOrUpdateLiveActivityWithCallsign:(NSString *)callsign 
+                                              handle:(NSString *)handle 
+                                            country:(NSString *)country;
+        - (void)endLiveActivity;
+        - (void)updateQsoDetailsWithCallsign:(NSString *)callsign 
+                                     handle:(NSString *)handle 
+                                   country:(NSString *)country;
+    }
+}

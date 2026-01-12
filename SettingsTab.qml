@@ -1,6 +1,5 @@
 /*
-	Original Copyright (C) 2019-2021 Doug McLain
-   	Modification Copyright (C) 2024 Rohith Namboothiri
+	Copyright (C) 2019-2021 Doug McLain
 
 	This program is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -125,13 +124,35 @@ Item {
 			color: "white"
 			verticalAlignment: Text.AlignVCenter
 		}
-		ComboBox {
+		/*ComboBox {
 			id: _comboPlayback
 			x: 100
 			y: playbackLabel.y
 			width: parent.width - 110
 			height: 30
-		}
+		}*/
+		
+
+ComboBox {
+    id: _comboPlayback
+    x: 100
+    y: playbackLabel.y
+    width: parent.width - 110
+    height: 30
+    model: droidstar.get_playbacks() // Fetch playback devices from existing model
+    // Refresh the ComboBox when the playback device list changes
+    Connections {
+        target: droidstar
+        function onPlaybackDevicesChanged() {
+            _comboPlayback.model = droidstar.get_playbacks(); // Update the model when playback devices change
+        }
+    }
+    onCurrentTextChanged: {
+        droidstar.setPlaybackDevice(currentText); // Set selected playback device in the backend
+    }
+}
+
+
 		Text {
 			id: captureLabel
 			x: 10
@@ -142,13 +163,34 @@ Item {
 			color: "white"
 			verticalAlignment: Text.AlignVCenter
 		}
-		ComboBox {
+		/*ComboBox {
 			id: _comboCapture
 			x: 100
 			y: captureLabel.y
 			width: parent.width - 110
 			height: 30
-		}
+		}*/
+
+
+ComboBox {
+    id: _comboCapture
+    x: 100
+    y: captureLabel.y
+    width: parent.width - 110
+    height: 30
+    model: droidstar.get_captures() // Fetch capture devices from existing model
+    // Refresh the ComboBox when the capture device list changes
+    Connections {
+        target: droidstar
+        function onCaptureDevicesChanged() {
+            _comboCapture.model = droidstar.get_captures(); // Update the model when capture devices change
+        }
+    }
+    onCurrentTextChanged: {
+        droidstar.setCaptureDevice(currentText); // Set selected capture device in the backend
+    }
+}
+
 		Text {
 			id: csLabel
 			x: 10
@@ -975,27 +1017,28 @@ Item {
 			selectByMouse: true
 			inputMethodHints: "ImhPreferNumbers"
 		}
-        Text {
-               id: _ambestatus
-               x: 10
-               y: 1365 // Adjust the y position as needed
-               width: parent.width - 30
-               height: 30
-               text: qsTr("No AMBE hardware connected")
-               color: "white"
-               font.pixelSize: 14
-           }
+		 Text {
+        id: _ambestatus
+        x: 10
+        y: 1365 // Adjust the y position as needed
+        width: parent.width - 30
+        height: 30
+        text: qsTr("No AMBE hardware connected")
+        color: "white"
+        font.pixelSize: 14
+    }
 
-           Text {
-               id: _mmdvmstatus
-               x: 10
-               y: ambestatus.y + ambestatus.height + 4
-               width: parent.width - 30
-               height: 30
-               text: qsTr("No MMDVM connected")
-               color: "white"
-               font.pixelSize: 14
-           }
+    Text {
+        id: _mmdvmstatus
+        x: 10
+        y: ambestatus.y + ambestatus.height + 4
+        width: parent.width - 30
+        height: 30
+        text: qsTr("No MMDVM connected")
+        color: "white"
+        font.pixelSize: 14
+    }
+
 
 
 // Buy Me a Coffee Button
@@ -1007,7 +1050,7 @@ Rectangle {
     radius: 5
     border.color: "#333333"
     x: 10
-    y: _mmdvmstatus.y + _mmdvmstatus.height + 6 // Place it below the _mmdvmstatus text
+    y: _mmdvmstatus.y + _mmdvmstatus.height + 5 // Place it below the _mmdvmstatus text
 
     Text {
         id: buttonText

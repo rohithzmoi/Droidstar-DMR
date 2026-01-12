@@ -1,28 +1,13 @@
-/*
-    Copyright (C) 2024 Rohith Namboothiri
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program. If not, see <https://www.gnu.org/licenses/>.
-*/
-
 #ifndef VUIDUPDATER_H
 #define VUIDUPDATER_H
 
 #include <QObject>
-#include <QDebug>  // For debugging purposes
+#include <QDebug>
 #include <QString>
 #include <QNetworkReply>
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QUrl>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -34,85 +19,112 @@ class VUIDUpdater : public QObject
     Q_PROPERTY(QString fetchedCountry READ fetchedCountry WRITE setFetchedCountry NOTIFY fetchedCountryChanged)
 
 public:
-    explicit VUIDUpdater(QObject *parent = nullptr) : QObject(parent), networkAccessManager(new QNetworkAccessManager(this)) {
-        connect(networkAccessManager, &QNetworkAccessManager::finished, this, &VUIDUpdater::onNetworkReply);
+    explicit VUIDUpdater(QObject *parent = nullptr)
+        : QObject(parent),
+          networkAccessManager(new QNetworkAccessManager(this))
+    {
+        connect(networkAccessManager, &QNetworkAccessManager::finished,
+                this, &VUIDUpdater::onNetworkReply);
     }
 
-    Q_INVOKABLE void fetchFirstNameFromAPI(unsigned int data1) {
-        if (data1) {
-            QUrl url("https://radioid.net/api/dmr/user/?id=" + QString::number(data1));
-            QNetworkRequest request(url);
-            networkAccessManager->get(request);
-        }
+    Q_INVOKABLE void fetchFirstNameFromAPI(unsigned int data1)
+    {
+        if (!data1) return;
+
+        QUrl url("https://radioid.net/api/users?id=" + QString::number(data1));
+        QNetworkRequest request(url);
+
+        // Keep-Alive is optional; not harmful
+        request.setRawHeader("Connection", "Keep-Alive");
+
+        networkAccessManager->get(request);
     }
 
-    Q_INVOKABLE QString fetchedFirstName() const { return m_fetchedFirstName; }
-    Q_INVOKABLE QString fetchedCountry() const { return m_fetchedCountry; }
+    QString fetchedFirstName() const { return m_fetchedFirstName; }
+    QString fetchedCountry() const { return m_fetchedCountry; }
 
-/*
-    Q_INVOKABLE void setFetchedFirstName(const QString &firstName) {
-        if (m_fetchedFirstName != firstName) {
-            m_fetchedFirstName = firstName;
-            emit fetchedFirstNameChanged(firstName);
-            qDebug() << "Emitting fetchedFirstNameChanged signal with name:" << firstName;
-        }
-    }
-    
-    Q_INVOKABLE void setFetchedCountry(const QString &country) {
-            if (m_fetchedCountry != country) {
-                m_fetchedCountry = country;
-                emit fetchedCountryChanged(country);
-                qDebug() << "Emitting fetchedCountryChanged signal with country:" << country;
-            }
-        } */
-
-    Q_INVOKABLE void setFetchedFirstName(const QString &firstName) {
+    void setFetchedFirstName(const QString &firstName)
+    {
+        if (m_fetchedFirstName == firstName) return;
         m_fetchedFirstName = firstName;
-        emit fetchedFirstNameChanged(firstName);
-        qDebug() << "Emitting fetchedFirstNameChanged signal with name:" << firstName;
+        emit fetchedFirstNameChanged(m_fetchedFirstName);
+        qDebug() << "Emitting fetchedFirstNameChanged signal with name:" << m_fetchedFirstName;
     }
 
-    Q_INVOKABLE void setFetchedCountry(const QString &country) {
+    void setFetchedCountry(const QString &country)
+    {
         QString modifiedCountry = country;
 
-        if (country == "United States") {
+        if (modifiedCountry == "United States") {
             modifiedCountry = "US";
-        } else if (country == "United Kingdom") {
+        } else if (modifiedCountry == "United Kingdom") {
             modifiedCountry = "UK";
         }
 
+        if (m_fetchedCountry == modifiedCountry) return;
         m_fetchedCountry = modifiedCountry;
-        emit fetchedCountryChanged(modifiedCountry);
-        qDebug() << "Emitting fetchedCountryChanged signal with country:" << modifiedCountry;
+        emit fetchedCountryChanged(m_fetchedCountry);
+        qDebug() << "Emitting fetchedCountryChanged signal with country:" << m_fetchedCountry;
     }
-
-
 
 signals:
     void fetchedFirstNameChanged(const QString &firstName);
     void fetchedCountryChanged(const QString &country);
 
 private slots:
-    void onNetworkReply(QNetworkReply *reply) {
-        if (reply->error() == QNetworkReply::NoError) {
-            QByteArray response_data = reply->readAll();
-            QJsonDocument json = QJsonDocument::fromJson(response_data);
-            if (!json.isNull()) {
-                QJsonObject jsonObject = json.object();
-                QJsonArray results = jsonObject["results"].toArray();
-                if (!results.isEmpty()) {
-                    QJsonObject firstResult = results.first().toObject();
-                    QString firstName = firstResult["fname"].toString();
-                    QString country = firstResult["country"].toString();
-                    qDebug() << "First name fetched from API:" << firstName;
-                    qDebug() << "Country fetched from API:" << country;
-                    setFetchedFirstName(firstName); // Update the first name property
-                    setFetchedCountry(country); // Update the country property
-                }
-            }
-        } else {
+    void onNetworkReply(QNetworkReply *reply)
+    {
+        if (!reply) return;
+
+        if (reply->error() != QNetworkReply::NoError) {
             qDebug() << "Network error:" << reply->errorString();
+            reply->deleteLater();
+            return;
         }
+
+        const QByteArray response_data = reply->readAll();
+        qDebug() << "onNetworkReply received:" << response_data;
+
+        QJsonParseError parseError;
+        QJsonDocument json = QJsonDocument::fromJson(response_data, &parseError);
+
+        if (parseError.error != QJsonParseError::NoError || !json.isObject()) {
+            qDebug() << "Failed to parse JSON response:" << parseError.errorString();
+            reply->deleteLater();
+            return;
+        }
+
+        QJsonObject jsonObject = json.object();
+
+        // radioid.net response (as per your logs) uses "rows": [ { "name": "...", "country": "..." } ]
+        // We'll also support older/alternate formats safely.
+        QJsonArray list = jsonObject.value("rows").toArray();
+        if (list.isEmpty()) {
+            list = jsonObject.value("results").toArray();
+        }
+
+        if (list.isEmpty()) {
+            qDebug() << "rows/results array is empty or missing.";
+            reply->deleteLater();
+            return;
+        }
+
+        QJsonObject first = list.first().toObject();
+
+        // Prefer "name", fallback to "fname" if needed
+        QString name = first.value("name").toString();
+        if (name.isEmpty()) {
+            name = first.value("fname").toString();
+        }
+
+        QString country = first.value("country").toString();
+
+        qDebug() << "Parsed name:" << name;
+        qDebug() << "Parsed country:" << country;
+
+        setFetchedFirstName(name);
+        setFetchedCountry(country);
+
         reply->deleteLater();
     }
 

@@ -50,15 +50,19 @@ property int rows: {
         }
     }
 
+// Properties to hold first row data
 property string firstRowSerialNumber: "N/A"
 property string firstRowCallsign: "N/A"
 property string firstRowHandle: "N/A"
 property string firstRowCountry: "N/A"
+
+// Properties to hold second row data
 property string secondRowSerialNumber: "N/A"
 property string secondRowCallsign: "N/A"
 property string secondRowHandle: "N/A"
 property string secondRowCountry: "N/A"
 
+// Slot to update the first row data when the signal is received from QsoTab
 function updateFirstRowData(serialNumber, callsign, handle, country) {
     firstRowSerialNumber = serialNumber;
     firstRowCallsign = callsign;
@@ -66,7 +70,7 @@ function updateFirstRowData(serialNumber, callsign, handle, country) {
     firstRowCountry = country;
 }
 
-
+// Slot to update the second row data when the signal is received from QsoTab
 function updateSecondRowData(serialNumber, callsign, handle, country) {
     secondRowSerialNumber = serialNumber;
     secondRowCallsign = callsign;
@@ -74,14 +78,14 @@ function updateSecondRowData(serialNumber, callsign, handle, country) {
     secondRowCountry = country;
 }
 
-
+// Connections to handle signals from QsoTab.qml
 Connections {
     target: qsoTab  // Assuming qsoTab is an instance of QsoTab somewhere higher in the hierarchy
     onFirstRowDataChanged: updateFirstRowData(serialNumber, callsign, handle, country)
     onSecondRowDataChanged: updateSecondRowData(serialNumber, callsign, handle, country)
 }
 
-    // Define the ListModel
+    // Define the ListModel within the scope of the Item
     ListModel {
         id: recentTgidsModel
     }
@@ -111,6 +115,29 @@ function clearRecentTgids() {
     }
 
     Component.onCompleted: updateRecentTgidsModel()
+
+
+
+/*
+function fetchFirstName() {
+    console.log("Fetching first name based on data1 change");
+    var fetchedName = vuidUpdater.mfirstName; // Fetch the first name using the property
+    vuidUpdater.msetFirstName(fetchedName); // Update the first name
+}
+
+function updateFirstNameText(name) {
+    firstNameText.text = name;
+    console.log("Text changed to:", name);
+}
+
+// Connections for VUIDUpdater
+Connections {
+    target: vuidUpdater
+    function onMfirstNameChanged(name) {
+        console.log("QML First name updated to:", name);
+        updateFirstNameText(name);
+    }
+} */
 
 
 // Function to update the full name with country
@@ -251,6 +278,7 @@ contentItem: Text {
                         height: parent.height
                         verticalAlignment: Text.AlignVCenter
                         color: "white" // Set the text color to white
+                        // Add a MouseArea to make the Text item clickable
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
@@ -413,6 +441,7 @@ contentItem: Text {
     }
     Button {
         id: _connectbutton
+        objectName: "connectbutton"
         x: parent.width / 2
         y: 0
         width: parent.width / 2
@@ -1168,17 +1197,17 @@ Timer {
 }
 
 function emitDataUpdated() {
-    updateTimer.restart();  
+    updateTimer.restart();  // Start or restart the timer whenever dmrID changes
 }
 
 onDmrIDChanged: {
     console.log("DMR ID changed, restarting update timer.");
-    emitDataUpdated();  
+    emitDataUpdated();  // Trigger the timer only when dmrID changes
 }
 
 
 
-    Button {
+   Button {
     Timer {
         id: _txtimer
         repeat: true

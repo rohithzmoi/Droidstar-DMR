@@ -131,7 +131,12 @@ void Mode::init(QString callsign, uint32_t dmrid, uint16_t nxdnid, char module, 
 #endif
     m_debug = false;
 }
-
+void Mode::reconnect()
+{
+    // Ensure that any necessary checks are performed before reconnecting
+    //send_disconnect();
+    begin_connect();
+}
 void Mode::ambe_connect_status(bool s)
 {
     if(s){

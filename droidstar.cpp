@@ -1,34 +1,25 @@
 /*
-	Original Copyright (C) 2019-2021 Doug McLain
+    Copyright (C) 2019-2021 Doug McLain
     Modification Copyright (C) 2024 Rohith Namboothiri
 
-	This program is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
 
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-	You should have received a copy of the GNU General Public License
-	along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "droidstar.h"
 #include "httpmanager.h"
-#include <QQuickWindow>
-#include <QDebug>
-#include <QString>
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
+#include <QGuiApplication>
 #include <QTimer>
-#include "vuidupdater.h"
 #ifdef Q_OS_ANDROID
 #include <QCoreApplication>
 #include <QJniObject>
@@ -47,57 +38,45 @@
 #include <fcntl.h>
 #include <iostream>
 
-
-
 DroidStar::DroidStar(QObject *parent) :
     QObject(parent),
-//dmr(new DMR()),
-   // m_firstName(""),
-//fetchFirstNameFromDMR()
-
-//networkManager(new QNetworkAccessManager(this)),
-//vuidUpdater(new VUIDUpdater(this)),
-//lastSrcId(0),
     m_dmrid(0),
     m_essid(0),
     m_dmr_destid(0),
     m_outlevel(0),
     m_mdirect(false),
-    m_tts(0)
+    m_tts(0),
+    m_reconnectTimer(new QTimer(this)),
+    m_keepAliveTimer(new QTimer(this)),
+     m_audioEngine(new AudioEngine("defaultInputDevice", "defaultOutputDevice")) // Instantiate AudioEngine
+
+
 {
-    
-    
-    
-    //emit firstNameChanged("Constructor Test Name");
-   /*
-    if (!connect(networkManager, &QNetworkAccessManager::finished, this, &DroidStar::onNetworkReply)) {
-        qDebug() << "Signal connection failed";
-    } else {
-        qDebug() << "Signal connected successfully";
-        qDebug() << "Network Manager initialized.";
-    }
+    // Connect the audio device list update signal to a slot
+      connect(m_audioEngine, &AudioEngine::audioDeviceListChanged, this, &DroidStar::updateDeviceListInQML);
 
-    */
+      // Discover initial audio devices
+      QStringList playbackDevices = m_audioEngine->discover_audio_devices(1);  // 1 for playback devices
+      QStringList captureDevices = m_audioEngine->discover_audio_devices(0);   // 0 for capture devices
 
     
-    
-   // if (connect(dmr, &DMR::firstNameChanged, this, &DroidStar::updateFirstName, Qt::QueuedConnection)) {
-    //    qDebug() << "Signal connected";
-    //    qDebug() << "dmr pointer value:" << dmr;
-        
-  //  } else {
-       // qDebug() << "Signal connection failed";
-//    }
-
-   // m_firstName = QString::number(dmr->m_modeinfo.srcid);
-
-      
     qRegisterMetaType<Mode::MODEINFO>("Mode::MODEINFO");
     m_settings_processed = false;
     m_modelchange = false;
     connect_status = Mode::DISCONNECTED;
     m_settings = new QSettings(QSettings::IniFormat, QSettings::UserScope, "dudetronics", "droidstar", this);
     config_path = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+   
+        connect(m_reconnectTimer, &QTimer::timeout, this, &DroidStar::attempt_reconnect);
+        connect(m_keepAliveTimer, &QTimer::timeout, this, &DroidStar::send_keep_alive);
+
+  
+
+
+        // Start timers
+        m_reconnectTimer->setInterval(5000);
+        m_keepAliveTimer->setInterval(30000);
+
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_WIN)
     config_path += "/dudetronics";
 #endif
@@ -121,71 +100,13 @@ DroidStar::DroidStar(QObject *parent) :
     qDebug() << "Software version: " << VERSION_NUMBER;
 }
 
-
 DroidStar::~DroidStar()
 {
-    //delete dmr;
-//delete signalEmitter;
+    
+        delete m_reconnectTimer;
+        delete m_keepAliveTimer;
+    delete m_audioEngine;
 }
-
-//QString DroidStar::getFirstName() const {
-  //  return dmr->firstName();
-//}
-
-/*
-void DroidStar::fetchFirstNameFromDMR(unsigned int srcid) {
-    if (srcid && srcid != lastSrcId) {
-        lastSrcId = srcid;
-        QUrl url("https://radioid.net/api/dmr/user/?id=" + QString::number(srcid));
-        QNetworkRequest request(url);
-
-        connect(networkManager, &QNetworkAccessManager::finished, this, [this](QNetworkReply *reply) {
-            if (reply->error() == QNetworkReply::NoError) {
-                QByteArray response_data = reply->readAll();
-                QJsonDocument json = QJsonDocument::fromJson(response_data);
-                if (!json.isNull()) {
-                    QJsonObject jsonObject = json.object();
-                    QJsonArray results = jsonObject["results"].toArray();
-                    if (!results.isEmpty()) {
-                        QJsonObject firstResult = results.first().toObject();
-                        QString firstName = firstResult["fname"].toString();
-                        qDebug() << "First name fetched from API:" << firstName;
-                        //vuidUpdater->setFirstName(firstName);  // Use the member variable
-                    }
-                }
-            }
-            reply->deleteLater();
-        });
-
-        networkManager->get(request);
-    }
-}
-
-void DroidStar::onNetworkReply(QNetworkReply *reply) {
-    if (reply->error() == QNetworkReply::NoError) {
-        QByteArray response_data = reply->readAll();
-        QJsonDocument json = QJsonDocument::fromJson(response_data);
-        if (!json.isNull()) {
-            QJsonObject jsonObject = json.object();
-            QJsonArray results = jsonObject["results"].toArray();
-            if (!results.isEmpty()) {
-                QJsonObject firstResult = results.first().toObject();
-                QString firstName = firstResult["fname"].toString();
-                qDebug() << "First name fetched from API:" << firstName;
-                //vuidUpdater->setFirstName(firstName);  // Assuming setFirstName() updates m_firstName and emits firstNameChanged
-                emit firstNameChanged(firstName);
-            }
-        }
-    } else {
-        qDebug() << "Network error:" << reply->errorString();
-    }
-    reply->deleteLater();
-}
-*/
-
-
-
-
 #ifdef Q_OS_ANDROID
 void DroidStar::keepScreenOn()
 {
@@ -206,6 +127,7 @@ void DroidStar::keepScreenOn()
         qApp->requestPermission(microphonePermission, this, &DroidStar::keepScreenOn);
     }
 }
+
 void DroidStar::reset_connect_status()
 {
     if(connect_status == Mode::CONNECTED_RW){
@@ -214,6 +136,19 @@ void DroidStar::reset_connect_status()
     }
 }
 #endif
+
+void DroidStar::updateDeviceListInQML()
+{
+    // Update the playback and capture devices
+    m_playbackDevices = m_audioEngine->discover_audio_devices(1);  // 1 for playback devices
+    m_captureDevices = m_audioEngine->discover_audio_devices(0);   // 0 for capture devices
+
+    // Emit signals to notify QML of the changes
+    emit playbackDevicesChanged();
+    emit captureDevicesChanged();
+    //emit audioEngineChanged();
+}
+
 
 void DroidStar::discover_devices()
 {
@@ -225,8 +160,8 @@ void DroidStar::discover_devices()
     m_captures.append("OS Default");
     m_vocoders.append("Software vocoder");
     m_modems.append("None");
-    m_playbacks.append(AudioEngine::discover_audio_devices(AUDIO_OUT));
-    m_captures.append(AudioEngine::discover_audio_devices(AUDIO_IN));
+    m_playbacks.append(m_audioEngine->discover_audio_devices(AUDIO_OUT));
+    m_captures.append(m_audioEngine->discover_audio_devices(AUDIO_IN));
 #if !defined(Q_OS_IOS)
     QMap<QString, QString> l = SerialAMBE::discover_devices();
     QMap<QString, QString>::const_iterator i = l.constBegin();
@@ -239,31 +174,6 @@ void DroidStar::discover_devices()
     emit update_devices();
 #endif
 }
-
-
-//void DroidStar::displayFirstName(QString firstName)
-//{
-  //  qDebug() << "displayFirstName called with" << firstName;
-   // if (m_firstName != firstName) {
-     //   m_firstName = firstName;
-        //emit firstNameChanged(firstName);
-       // emit firstNameChanged(m_firstName);
-        //qDebug() << "FirstName updated to" << firstName;
-    //}
-//}
-
-//void DroidStar::updateFirstName(QString firstName) {
-  //  qDebug() << "updateFirstName called with" << firstName;
-    //displayFirstName(firstName);
-//}
-
-//QString DroidStar::firstName() const {
-//    return m_firstName;
-//}
-
-
-
-
 
 void DroidStar::download_file(QString f, bool u)
 {
@@ -406,7 +316,7 @@ void DroidStar::process_connect()
         else if(m_protocol == "IAX"){
             m_refname = m_saved_iaxhost;
         }
-
+        m_keepAliveTimer->start();
         emit connect_status_changed(1);
         connect_status = Mode::CONNECTING;
         QStringList sl;
@@ -546,6 +456,50 @@ void DroidStar::process_connect()
     qDebug() << "process_connect called m_protocol == " << m_protocol;
     qDebug() << "process_connect called m_port == " << m_port;
 */
+}
+
+
+void DroidStar::attempt_reconnect()
+{
+    if(connect_status == Mode::DISCONNECTED) {
+        qDebug() << "Attempting to reconnect...";
+        process_connect();
+    }
+}
+
+// Function to start the keep-alive mechanism
+void DroidStar::start_keep_alive()
+{
+    if (!m_keepAliveTimer->isActive()) {
+        m_keepAliveTimer->start(30000);  // 30,000 milliseconds = 30 seconds
+        emit update_log("Keep-alive timer started");
+    }
+}
+
+// Function to stop the keep-alive mechanism
+void DroidStar::stop_keep_alive()
+{
+    if (m_keepAliveTimer->isActive()) {
+        m_keepAliveTimer->stop();
+        emit update_log("Keep-alive timer stopped");
+    }
+}
+
+// Slot to send the keep-alive packet
+void DroidStar::send_keep_alive()
+{
+    if (connect_status == Mode::CONNECTED_RW) {
+        // Emit a keep-alive packet or ping command
+        emit update_log("Sending keep-alive packet");
+        // Call an appropriate function to send a small data packet or ping
+        // This could be a simple command to the host/server
+        if (m_mode) {
+            //m_mode->send_keep_alive();
+        }
+    } else {
+        // Stop the timer if not connected
+        stop_keep_alive();
+    }
 }
 
 void DroidStar::process_host_change(const QString &h)
@@ -1150,15 +1104,20 @@ void DroidStar::process_dmr_ids()
                 QStringList llids = lids.simplified().split(' ');
 
                 if(llids.size() >= 2){
-                    m_dmrids[llids.at(0).toUInt()] = llids.at(1);
-                }
-            }
-        }
-        f.close();
-    }
-    else{
-        download_file("/DMRIDs.dat");
-    }
+                                    if(llids.size() == 3){
+                                         m_dmrids[llids.at(0).toUInt()] = llids.at(1) + " - " + llids.at(2);
+                                    }
+                                    else{
+                                        m_dmrids[llids.at(0).toUInt()] = llids.at(1);
+                                    }
+                                }
+                            }
+                        }
+                        f.close();
+                    }
+                    else{
+                        download_file("/DMRIDs.dat");
+                    }
 }
 
 void DroidStar::update_dmr_ids()
@@ -1343,14 +1302,7 @@ void DroidStar::update_data(Mode::MODEINFO info)
             emit open_vocoder_dialog();
         }
     }
-    // Example call to fetchFirstNameFromDMR when srcid is updated
-  /*  if (info.stream_state == DMR::STREAM_NEW) {
-        if (info.srcid != 0) {
-            fetchFirstNameFromDMR(info.srcid);
-        }
-    }
-*/
-    
+
     m_netstatustxt = "Connected ping cnt: " + QString::number(info.count);
     m_ambestatustxt = "AMBE: " + (info.ambeprodid.isEmpty() ? "No device" : info.ambeprodid);
     m_mmdvmstatustxt = "MMDVM: ";
@@ -1528,9 +1480,6 @@ void DroidStar::click_tx(bool tx)
     emit tx_clicked(tx);
 }
 
-
-
-
 void DroidStar::addRecentTGID(const QString& tgid) {
     QSettings settings;
     settings.beginGroup("RecentTGIDs");
@@ -1557,9 +1506,96 @@ QStringList DroidStar::loadRecentTGIDs() const {
 void DroidStar::clearRecentTGIDs() {
     QSettings settings;
     settings.beginGroup("RecentTGIDs");
-    settings.remove("");  // This clears all settings within the group
+    settings.remove("");
     settings.endGroup();
 }
 
+void DroidStar::on_network_state_changed(QNetworkInformation::Reachability reachability) {
+    if (reachability == QNetworkInformation::Reachability::Online) {
+        qDebug() << "Network is online. Checking connection status...";
+        if (connect_status == Mode::DISCONNECTED) {
+            process_connect();
+        }
+    } else {
+        qDebug() << "Network is offline. Stopping keep-alive messages.";
+        m_keepAliveTimer->stop();
+    }
+}
 
 
+// Function to handle entering the background
+void DroidStar::handle_background_state() {
+    qDebug() << "App has entered background.";
+    if (connect_status == Mode::CONNECTED_RW) {
+        m_keepAliveTimer->stop();
+       
+    }
+}
+
+
+/*void DroidStar::setPlaybackDevice(const QString &deviceName) {
+    if (m_audioEngine) {
+        m_audioEngine->setOutputDevice(deviceName);
+    } else {
+        qDebug() << "AudioEngine not initialized!";
+    }
+}
+
+void DroidStar::setCaptureDevice(const QString &deviceName) {
+    if (m_audioEngine) {
+        m_audioEngine->setInputDevice(deviceName);
+    } else {
+        qDebug() << "AudioEngine not initialized!";
+    }
+}*/
+
+QStringList DroidStar::get_playbacks() {
+    QStringList playbacks = m_audioEngine->discover_audio_devices(1); // Fetch raw output devices
+    QStringList friendlyPlaybacks;
+    for (const QString &device : playbacks) {
+        friendlyPlaybacks << m_audioEngine->getFriendlyName(device); // Convert to friendly names
+    }
+    return friendlyPlaybacks; // Return the list of friendly names
+}
+
+QStringList DroidStar::get_captures() {
+    QStringList captures = m_audioEngine->discover_audio_devices(0); // Fetch raw input devices
+    QStringList friendlyCaptures;
+    for (const QString &device : captures) {
+        friendlyCaptures << m_audioEngine->getFriendlyName(device); // Convert to friendly names
+    }
+    return friendlyCaptures; // Return the list of friendly names
+}
+
+
+void DroidStar::setPlaybackDevice(const QString &deviceName) {
+    QString internalDeviceName = m_audioEngine->mapFriendlyNameToDevice(deviceName);
+    m_audioEngine->setOutputDevice(internalDeviceName); // Set the selected playback device
+}
+
+void DroidStar::setCaptureDevice(const QString &deviceName) {
+    QString internalDeviceName = m_audioEngine->mapFriendlyNameToDevice(deviceName);
+    m_audioEngine->setInputDevice(internalDeviceName); // Set the selected capture device
+}
+
+
+// Function to handle returning to the foreground
+void DroidStar::handle_foreground_state() {
+    qDebug() << "App has returned to foreground.";
+    if (connect_status == Mode::DISCONNECTED) {
+        process_connect(); // Reconnect when coming back to the foreground
+    }
+    m_keepAliveTimer->start();
+}
+
+void DroidStar::setup_state_change_listeners() {
+#ifdef Q_OS_IOS
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [=](Qt::ApplicationState state){
+        if (state == Qt::ApplicationInactive || state == Qt::ApplicationSuspended) {
+            handle_background_state();
+        } else if (state == Qt::ApplicationActive) {
+            handle_foreground_state();
+        }
+    });
+#endif
+}

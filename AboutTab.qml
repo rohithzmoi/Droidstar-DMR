@@ -1,6 +1,6 @@
 /*
-	Original Copyright (C) 2019-2021 Doug McLain
-    Modification Copyright (C) 2024 Rohith Namboothiri
+	Copyright (C) 2019-2021 Doug McLain
+    Modified Copyright (C) 2024 Rohith Namboothiri
 
 	This program is free software: you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -42,8 +42,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 wrapMode: Text.WordWrap
                 color: "white"
-                text: qsTr("\nDROID-Star git build " + droidstar.get_software_build() +
-                           "\nPlatform:\t" + droidstar.get_platform() +
+                text: qsTr("\nDroidStar iOS build - V0.44.17.0 " +
                            "\nArchitecture:\t" + droidstar.get_arch() +
                            "\nBuild ABI:\t" + droidstar.get_build_abi() +
                            "\n\nProject page: https://github.com/nostar/DroidStar" +
@@ -96,7 +95,7 @@ Item {
                     id: paypalButton
                     width: 200
                     height: 50
-                    color: "#0070BA"
+                    color: "#0070BA" // PayPal branding color
                     radius: 10
                     border.color: "#333333"
 

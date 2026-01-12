@@ -1,0 +1,2 @@
+2024-08-17 04:03:06,871 - aqt.main - INFO - installer 140704590129088 aqtinstall(aqt) v3.1.18 on Python 3.9.6 [CPython Clang 15.0.0 (clang-1500.1.0.2.5)]
+2024-08-17 04:03:06,872 - aqt.main - ERROR - installer 140704590129088 Please supply a target architecture.

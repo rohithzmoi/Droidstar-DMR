@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
-    Modifications Copyright (C) 2024 Rohith Namboothiri
+
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -15,20 +15,9 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-
 #include <iostream>
 #include <cstring>
 #include "dmr.h"
-#include <QDebug>
-#include "DroidStar.h"
-
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-
 #include "cgolay2087.h"
 #include "crs129.h"
 #include "SHA256.h"
@@ -36,7 +25,6 @@
 #include "MMDVMDefines.h"
 #ifdef USE_MD380_VOCODER
 #include <md380_vocoder.h>
-
 #endif
 
 const uint32_t ENCODING_TABLE_1676[] =
@@ -51,7 +39,6 @@ const uint32_t ENCODING_TABLE_1676[] =
      0xC151U, 0xC322U, 0xC5B4U, 0xC7C7U, 0xC898U, 0xCAEBU, 0xCC7DU, 0xCE0EU, 0xD0B3U, 0xD2C0U, 0xD456U, 0xD625U,
      0xD97AU, 0xDB09U, 0xDD9FU, 0xDFECU, 0xE0E6U, 0xE295U, 0xE403U, 0xE670U, 0xE92FU, 0xEB5CU, 0xEDCAU, 0xEFB9U,
      0xF104U, 0xF377U, 0xF5E1U, 0xF792U, 0xF8CDU, 0xFABEU, 0xFC28U, 0xFE5BU};
-
 
 DMR::DMR() :
     m_txslot(2),
@@ -68,12 +55,7 @@ DMR::DMR() :
 
 DMR::~DMR()
 {
-   // delete networkManager;
 }
-
-
-
-
 
 void DMR::set_dmr_params(uint8_t essid, QString password, QString lat, QString lon, QString location, QString desc, QString freq, QString url, QString swid, QString pkid, QString options)
 {
@@ -108,6 +90,7 @@ void DMR::process_udp()
 
     buf.resize(m_udp->pendingDatagramSize());
     m_udp->readDatagram(buf.data(), buf.size(), &sender, &senderPort);
+   
 
     if(m_debug){
         QDebug debug = qDebug();
@@ -204,8 +187,7 @@ void DMR::process_udp()
         m_modeinfo.count++;
     }
     if((buf.size() != 55) && ( (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) )){
-      //  m_modeinfo.stream_state = STREAM_IDLE; fetchFirstName(m_modeinfo.srcid); // Ensure this line is correctly placed
-
+        m_modeinfo.stream_state = STREAM_IDLE;
     }
     if((buf.size() == 55) &&
         (::memcmp(buf.data(), "DMRD", 4U) == 0) &&
@@ -235,17 +217,7 @@ void DMR::process_udp()
             m_modeinfo.frame_number = (uint8_t)buf.data()[4];
             m_modeinfo.slot = (buf.data()[15] & 0x80) ? 2 : 1;
             t = 0x41;
-            m_currentSrcId = (uint32_t)((buf.data()[5] << 16) | ((buf.data()[6] << 8) & 0xff00) | (buf.data()[7] & 0xff));
-           /* if (m_currentSrcId != m_modeinfo.srcid) {
-                        m_modeinfo.srcid = m_currentSrcId;
-                        fetchFirstName(m_modeinfo.srcid);
-                    }
-           
             qDebug() << "New DMR stream from " << m_modeinfo.srcid << " to " << m_modeinfo.dstid;
-            // Call fetchFirstName with the source ID from the incoming stream
-                        qDebug() << "Calling fetchFirstName with srcId:" << m_modeinfo.srcid;
-                        fetchFirstName(m_modeinfo.srcid);  // Add this line to fetch the name on receiving */
-                    
         }
         if(m_modem){
             m_rxmodemq.append(MMDVM_FRAME_START);
@@ -329,81 +301,6 @@ void DMR::process_udp()
     }
 }
 
-
-
-/*
-void DMR::fetchFirstName(uint32_t srcId) {
-    // Static or member variable to track the last fetched ID
-    static uint32_t lastSrcId = 0;
-    static QTimer debounceTimer;
-
-    // If the new source ID is different or the timer is not active, proceed
-    if (srcId != lastSrcId || !debounceTimer.isActive()) {
-        lastSrcId = srcId;
-        debounceTimer.start(500); // 500ms debounce period
-
-        qDebug() << "fetchFirstName called with srcId:" << srcId;
-
-        QUrl url(QString("https://radioid.net/api/dmr/user/?id=%1").arg(srcId));
-        QNetworkRequest request(url);
-
-        qDebug() << "Attempting to fetch first name from URL:" << url.toString();
-
-        networkManager->get(request);
-    }
-}
-
-void DMR::onNetworkReply(QNetworkReply* reply) {
-    if (reply->error() == QNetworkReply::NoError) {
-        QByteArray response_data = reply->readAll();
-        QJsonDocument json = QJsonDocument::fromJson(response_data);
-
-        qDebug() << "Received response data:" << response_data;
-
-        if (!json.isNull()) {
-            QJsonObject jsonObject = json.object();
-            QJsonArray results = jsonObject["results"].toArray();
-
-            if (!results.isEmpty()) {
-                QJsonObject firstResult = results[0].toObject();
-                QString firstName = firstResult["fname"].toString();
-                
-                qDebug() << "First name parsed:" << firstName;
-
-                // Update the stored first name
-                setFirstName(firstName);
-                qDebug() << "First set:" << firstName;
-                emit setFirstName(firstName);
-               // qDebug() << "Emit" << firstName;
-            } else {
-                qDebug() << "API response did not contain results.";
-            }
-        } else {
-            qDebug() << "Error parsing JSON response.";
-        }
-    } else {
-        qDebug() << "Network error:" << reply->errorString();
-    }
-
-    reply->deleteLater();
-}
-
-
-
-
-QString DMR::firstName() const {
-    return m_firstName;
-}
-
-void DMR::setFirstName(const QString &name) {
-    if (m_firstName != name) {
-        m_firstName = name;
-        qDebug() << "FirstName updated to" << m_firstName;
-        emit firstNameChanged(m_firstName);
-    }
-}
-*/
-
 void DMR::setup_connection()
 {
     m_modeinfo.status = CONNECTED_RW;
@@ -418,8 +315,6 @@ void DMR::setup_connection()
     m_ping_timer->start(5000);
     m_audio = new AudioEngine(m_audioin, m_audioout);
     m_audio->init();
-    //qDebug() << "Calling fetchFirstName with srcId:" << m_modeinfo.srcid;
-    //fetchFirstName(m_modeinfo.srcid);
 }
 
 void DMR::hostname_lookup(QHostInfo i)

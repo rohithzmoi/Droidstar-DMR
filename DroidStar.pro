@@ -1,6 +1,5 @@
-QT += quick quickcontrols2 network multimedia
+QT += quick quickcontrols2 network multimedia core gui concurrent
 //QT += xlsx
-
 
 unix:!ios:QT += serialport
 win32:QT += serialport
@@ -13,11 +12,11 @@ ICON = images/droidstar.icns
 macx:LIBS += -framework AVFoundation
 macx:QMAKE_MACOSX_DEPLOYMENT_TARGET = 12.0
 macx:QMAKE_INFO_PLIST = Info.plist.mac
-ios:LIBS += -framework AVFoundation
+ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit
 ios:QMAKE_IOS_DEPLOYMENT_TARGET=14.0
 ios:QMAKE_TARGET_BUNDLE_PREFIX = org.dudetronics
 ios:QMAKE_BUNDLE = droidstar
-ios:VERSION = 0.43.20
+ios:VERSION = 0.44.16
 ios:Q_ENABLE_BITCODE.name = ENABLE_BITCODE
 ios:Q_ENABLE_BITCODE.value = NO
 ios:QMAKE_MAC_XCODE_SETTINGS += Q_ENABLE_BITCODE
@@ -35,6 +34,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
         CRCenc.cpp \
         vuidupdater.cpp \
+        iosshare.mm \
         LogHandler.cpp \
        Golay24128.cpp \
         M17Convolution.cpp \
@@ -82,10 +82,27 @@ SOURCES += \
         ref.cpp \
         xrf.cpp \
         ysf.cpp
+# Android-specific source files
 android:SOURCES += androidserialport.cpp
+
+# Non-iOS source files
 !ios:SOURCES += serialambe.cpp serialmodem.cpp
+
+# Objective-C source files for macOS and iOS
 macx:OBJECTIVE_SOURCES += micpermission.mm
-ios:OBJECTIVE_SOURCES += micpermission.mm
+ios:OBJECTIVE_SOURCES += micpermission.mm AudioSessionManager.mm
+
+# Enable background audio mode for iOS
+ios:QMAKE_MAC_XCODE_SETTINGS += QMAKE_IOS_BACKGROUND_MODES = YES
+ios:QMAKE_INFO_PLIST_EXTRA += "<key>UIBackgroundModes</key>"
+ios:QMAKE_INFO_PLIST_EXTRA += "<array>"
+ios:QMAKE_INFO_PLIST_EXTRA += "    <string>audio</string>"
+ios:QMAKE_INFO_PLIST_EXTRA += "</array>"
+ios:QMAKE_CXXFLAGS += -fobjc-arc
+
+
+                         
+
 
 resources.files = main.qml AboutTab.qml HostsTab.qml LogTab.qml MainTab.qml SettingsTab.qml fontawesome-webfont.ttf QsoTab.qml
 resources.prefix = /$${TARGET}
@@ -107,6 +124,7 @@ HEADERS += \
 	DMRDefines.h \
 	vuidupdater.h \
 	LogHandler.h \
+	AudioSessionManager.h \
      Golay24128.h \
 	M17Convolution.h \
 	M17Defines.h \
@@ -208,11 +226,7 @@ android:HEADERS += androidserialport.h
 macx:HEADERS += micpermission.h
 !ios:HEADERS += serialambe.h serialmodem.h
 android:ANDROID_VERSION_CODE = 79
-#android:QT_ANDROID_MIN_SDK_VERSION = 31
-
-android:QT_ANDROID_MIN_SDK_VERSION = 21  # Set the minimum SDK version here
-android:QT_ANDROID_TARGET_SDK_VERSION = 30  # Set the target SDK version here
-
+android:QT_ANDROID_MIN_SDK_VERSION = 31
 
 contains(ANDROID_TARGET_ARCH,armeabi-v7a) {
 	ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
@@ -228,7 +242,3 @@ contains(DEFINES, USE_FLITE){
 contains(DEFINES, USE_MD380_VOCODER){
 	LIBS += -lmd380_vocoder -Xlinker --section-start=.firmware=0x0800C000 -Xlinker  --section-start=.sram=0x20000000
 }
-
-DISTFILES += \
-    android/AndroidManifest.xml
-android: include(C:/Users/rohith/android_openssl/android_openssl-master/openssl.pri)
