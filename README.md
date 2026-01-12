@@ -1,5 +1,13 @@
 # Modified DROIDSTAR DMR App for iOS & Android
 
+## 📢 Important Announcement
+
+**Please note:** I will no longer be maintaining the Android version, at least for the near future. Due to the complexity of maintaining both iOS and Android versions simultaneously, I've made the decision to focus exclusively on iOS development. 
+
+**Exciting news:** A completely redesigned, fresh, and modern version of Droidstar is coming soon for iOS! Stay tuned for updates.
+
+---
+
 This project is a modified version of the [original Droidstar App](https://github.com/nostar/DroidStar) by Doug McLain. The modifications introduce new features and enhancements to improve user experience and functionality.
 
 This project uses QT 6.7.2
@@ -29,10 +37,10 @@ I am excited to announce the release of several new features and improvements:
   
 ## Downloads
 
-- For Android users, you can download the app via [this link](https://inz.to/droidstar-vu3lvo).
-- For older Android versions (Armabi_v7a), please use [this link](https://inz.to/droidstar-vu3lvo).
+- ~~For Android users, you can download the app via [this link](https://inz.to/droidstar-vu3lvo).~~
+- ~~For older Android versions (Armabi_v7a), please use [this link](https://inz.to/droidstar-vu3lvo).~~
 
-- For iOS users, the iOS version is now available! Due to the 10k limit on TestFlight, I won’t be posting the invitation link publicly. If you’re interested in testing the iOS version, please mail me at vu3lvo@proton.me.
+- For iOS users, the iOS version is now available! Due to the 10k limit on TestFlight, I won't be posting the invitation link publicly. If you're interested in testing the iOS version, please mail me at vu3lvo@proton.me.
 
 ## Feedback and Support
 
@@ -98,4 +106,3 @@ I deeply appreciate the incredible contributions by our patrons/contributors who
 ---
 
 Want to see your name here? Contribute today (**[buy me a coffee](https://buymeacoffee.com/rohithz)**./**[Contribute Via PayPal](https://www.paypal.com/ncp/payment/NU89529268M2W)**) and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
-
