@@ -4,7 +4,7 @@
 
 **Please note:** I will no longer be maintaining the Android version, at least for the near future. Due to the complexity of maintaining both iOS and Android versions simultaneously, I've made the decision to focus exclusively on iOS development. 
 
-**Exciting news:** A completely redesigned, fresh, and modern version of Droidstar is coming soon for iOS! Stay tuned for updates.
+**Special Contributor** A huge thanks and shout-out to VU2TBR (T. Bala) for his valuable feedback and idea contributions. His inputs played a major role in helping me design and refine these features.
 
 ---
 
