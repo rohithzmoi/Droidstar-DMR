@@ -1,9 +1,31 @@
+/*
+    Copyright (C) 2025 Rohith Namboothiri
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 import Foundation
 import ActivityKit
-import SwiftUI
+// Note: SwiftUI and Widget struct moved to separate Widget Extension target
+// For now, we only need ActivityKit for the LiveActivityManager
 
+// IMPORTANT:
+// We explicitly set the Objective-C runtime name so ObjC/ObjC++ can link against
+// `_OBJC_CLASS_$_LiveActivityManager` (Qt/qmake links Swift into a C++ binary).
 @available(iOS 16.1, *)
-@objc class LiveActivityManager: NSObject {
+@objc(LiveActivityManager)
+class LiveActivityManager: NSObject {
     // Singleton instance
     @objc static let shared = LiveActivityManager()
     
@@ -19,16 +41,22 @@ import SwiftUI
     /// Check if Dynamic Island is available on this device
     @objc static var isDynamicIslandAvailable: Bool {
         if #available(iOS 16.1, *) {
-            return ActivityAuthorizationInfo().areActivitiesEnabled
+            let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
+            if !enabled {
+                print("[DroidStar][LiveActivity] areActivitiesEnabled == false")
+            }
+            return enabled
         }
         return false
     }
     
     /// Start or update a live activity with QSO details
-    @objc func startOrUpdateLiveActivity(callsign: String, handle: String, country: String) {
+    /// mode: "RX" or "TX"
+    @objc(startOrUpdateLiveActivityWithMode:callsign:handle:country:tgid:)
+    func startOrUpdateLiveActivity(mode: String, callsign: String, handle: String, country: String, tgid: String) {
         if #available(iOS 16.1, *) {
             activityQueue.async { [weak self] in
-                self?._startOrUpdateActivity(callsign: callsign, handle: handle, country: country)
+                self?._startOrUpdateActivity(mode: mode, callsign: callsign, handle: handle, country: country, tgid: tgid)
             }
         }
     }
@@ -42,24 +70,47 @@ import SwiftUI
         }
     }
     
-    /// Update QSO details in the live activity
-    @objc func updateQsoDetails(callsign: String, handle: String, country: String) {
+    /// End ALL live activities (cleanup orphans from previous runs)
+    @objc func endAllActivities() {
         if #available(iOS 16.1, *) {
             activityQueue.async { [weak self] in
-                self?._updateActivity(callsign: callsign, handle: handle, country: country)
+                self?._endAllActivities()
             }
         }
+    }
+    
+    /// Update QSO details in the live activity
+    @objc(updateQsoDetailsWithMode:callsign:handle:country:tgid:)
+    func updateQsoDetails(mode: String, callsign: String, handle: String, country: String, tgid: String) {
+        if #available(iOS 16.1, *) {
+            activityQueue.async { [weak self] in
+                self?._updateActivity(mode: mode, callsign: callsign, handle: handle, country: country, tgid: tgid)
+            }
+        }
+    }
+
+    // Backwards-compatible ObjC selectors (older code paths)
+    @objc(startOrUpdateLiveActivityWithCallsign:handle:country:)
+    func startOrUpdateLiveActivity(callsign: String, handle: String, country: String) {
+        startOrUpdateLiveActivity(mode: "RX", callsign: callsign, handle: handle, country: country, tgid: "")
+    }
+
+    @objc(updateQsoDetailsWithCallsign:handle:country:)
+    func updateQsoDetails(callsign: String, handle: String, country: String) {
+        updateQsoDetails(mode: "RX", callsign: callsign, handle: handle, country: country, tgid: "")
     }
     
     // MARK: - Private Methods
     
     @available(iOS 16.1, *)
-    private func _startOrUpdateActivity(callsign: String, handle: String, country: String) {
+    private func _startOrUpdateActivity(mode: String, callsign: String, handle: String, country: String, tgid: String) {
         let attributes = DroidStarActivityAttributes()
         let state = DroidStarActivityAttributes.ContentState(
+            mode: mode,
             callsign: callsign,
             handle: handle,
             country: country,
+            tgid: tgid,
             timestamp: Date()
         )
         
@@ -67,10 +118,20 @@ import SwiftUI
             // Update existing activity
             Task {
                 await activity.update(using: state)
+                print("[DroidStar][LiveActivity] Updating content for activity \(activity.id)")
             }
         } else {
+            // End any stale/orphan activities from previous runs before starting a new one
+            Task {
+                for existingActivity in Activity<DroidStarActivityAttributes>.activities {
+                    print("[DroidStar][LiveActivity] Ending stale activity: \(existingActivity.id)")
+                    await existingActivity.end(dismissalPolicy: .immediate)
+                }
+            }
+            
             // Start new activity
             do {
+                print("[DroidStar][LiveActivity] Requesting Live Activity mode=\(mode) callsign=\(callsign) handle=\(handle) country=\(country) tgid=\(tgid)")
                 let newActivity = try Activity.request(
                     attributes: attributes,
                     contentState: state,
@@ -78,21 +139,23 @@ import SwiftUI
                 )
                 
                 activity = newActivity
-                print("Started Live Activity: \(newActivity.id)")
+                print("[DroidStar][LiveActivity] Started Live Activity: \(newActivity.id)")
             } catch {
-                print("Error starting Live Activity: \(error.localizedDescription)")
+                print("[DroidStar][LiveActivity] Error starting Live Activity: \(error)")
             }
         }
     }
     
     @available(iOS 16.1, *)
-    private func _updateActivity(callsign: String, handle: String, country: String) {
+    private func _updateActivity(mode: String, callsign: String, handle: String, country: String, tgid: String) {
         guard activity != nil else { return }
         
         let state = DroidStarActivityAttributes.ContentState(
+            mode: mode,
             callsign: callsign,
             handle: handle,
             country: country,
+            tgid: tgid,
             timestamp: Date()
         )
         
@@ -108,96 +171,19 @@ import SwiftUI
         Task {
             await activity.end(dismissalPolicy: .default)
             self.activity = nil
-            print("Ended Live Activity: \(activity.id)")
+            print("[DroidStar][LiveActivity] Ended Live Activity: \(activity.id)")
         }
     }
-}
-
-// MARK: - Activity Attributes
-
-@available(iOS 16.1, *)
-struct DroidStarActivityAttributes: ActivityAttributes {
-    public typealias DroidStarActivityStatus = ContentState
     
-    public struct ContentState: Codable, Hashable {
-        var callsign: String
-        var handle: String
-        var country: String
-        var timestamp: Date
-    }
-    
-    // Additional attributes that won't change during the activity
-    // Can be used for static data
-}
-
-// MARK: - Live Activity UI
-
-@available(iOS 16.1, *)
-struct DroidStarLiveActivity: Widget {
-    var body: some WidgetConfiguration {
-        ActivityConfiguration(for: DroidStarActivityAttributes.self) { context in
-            // Lock screen/banner UI goes here
-            VStack(alignment: .leading) {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("\(context.state.callsign)")
-                            .font(.headline)
-                        Text("\(context.state.handle)")
-                            .font(.subheadline)
-                        Text("\(context.state.country)")
-                            .font(.caption)
-                    }
-                    Spacer()
-                    Text(context.state.timestamp, style: .time)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+    @available(iOS 16.1, *)
+    private func _endAllActivities() {
+        Task {
+            for existingActivity in Activity<DroidStarActivityAttributes>.activities {
+                print("[DroidStar][LiveActivity] Ending activity: \(existingActivity.id)")
+                await existingActivity.end(dismissalPolicy: .immediate)
             }
-            .padding()
-            .activityBackgroundTint(Color.black.opacity(0.8))
-            .activitySystemActionForegroundColor(Color.white)
-            
-        } dynamicIsland: { context in
-            // Dynamic Island UI goes here
-            DynamicIsland {
-                // Expanded UI when tapped or when in expanded state
-                DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "radio")
-                        .foregroundColor(.blue)
-                }
-                
-                DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.timestamp, style: .time)
-                        .foregroundColor(.secondary)
-                }
-                
-                DynamicIslandExpandedRegion(.center) {
-                    Text("\(context.state.callsign)")
-                        .font(.headline)
-                }
-                
-                DynamicIslandExpandedRegion(.bottom) {
-                    HStack {
-                        Text("\(context.state.handle)")
-                        Spacer()
-                        Text("\(context.state.country)")
-                    }
-                    .font(.subheadline)
-                }
-            } compactLeading: {
-                // Compact leading view (minimal)
-                Image(systemName: "radio")
-                    .foregroundColor(.blue)
-            } compactTrailing: {
-                // Compact trailing view (minimal)
-                Text(context.state.callsign.prefix(3))
-                    .font(.caption)
-            } minimal: {
-                // Minimal view (when multiple activities are active)
-                Image(systemName: "radio")
-                    .foregroundColor(.blue)
-            }
-            .keylineTint(.blue)
+            self.activity = nil
+            print("[DroidStar][LiveActivity] All activities ended")
         }
     }
 }

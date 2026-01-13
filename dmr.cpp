@@ -103,9 +103,16 @@ void DMR::process_udp()
     }
 
     if((m_modeinfo.status != CONNECTED_RW) && (::memcmp(buf.data() + 3, "NAK", 3U) == 0)){
+        // NAK during login/config typically indicates auth/config rejection.
+        if (m_password.isEmpty()) {
+            emit update_log("DMR: login rejected (NAK). Password is empty.");
+        } else {
+            emit update_log("DMR: login/config rejected (NAK). Check password and DMR profile fields.");
+        }
         m_modeinfo.status = DISCONNECTED;
     }
     if((m_modeinfo.status != CONNECTED_RW) && (::memcmp(buf.data(), "MSTCL", 5U) == 0)){
+        emit update_log("DMR: master closed connection (MSTCL).");
         m_modeinfo.status = CLOSED;
     }
     if((m_modeinfo.status != CONNECTED_RW) && (::memcmp(buf.data(), "RPTACK", 6U) == 0)){
@@ -202,6 +209,7 @@ void DMR::process_udp()
             m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
             m_modeinfo.streamid = 0;
             t = 0x42;
+            emit update(m_modeinfo);
         }
         else if((uint8_t)buf.data()[15] & 0x01){
             m_audio->start_playback();
@@ -218,6 +226,7 @@ void DMR::process_udp()
             m_modeinfo.slot = (buf.data()[15] & 0x80) ? 2 : 1;
             t = 0x41;
             qDebug() << "New DMR stream from " << m_modeinfo.srcid << " to " << m_modeinfo.dstid;
+            emit update(m_modeinfo);
         }
         if(m_modem){
             m_rxmodemq.append(MMDVM_FRAME_START);

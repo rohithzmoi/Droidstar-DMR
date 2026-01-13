@@ -26,6 +26,7 @@
 #endif
 #ifdef Q_OS_IOS
 #include "micpermission.h"
+#include "AudioSessionManager.h"
 #endif
 #include <QStandardPaths>
 #include <QFile>
@@ -37,6 +38,23 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <iostream>
+
+#ifdef Q_OS_IOS
+// Static instance for PTT callbacks from remote commands (headphones, Control Center)
+static DroidStar *s_droidStarInstance = nullptr;
+
+static void pttPressCallback() {
+    if (s_droidStarInstance) {
+        QMetaObject::invokeMethod(s_droidStarInstance, "press_tx", Qt::QueuedConnection);
+    }
+}
+
+static void pttReleaseCallback() {
+    if (s_droidStarInstance) {
+        QMetaObject::invokeMethod(s_droidStarInstance, "release_tx", Qt::QueuedConnection);
+    }
+}
+#endif
 
 DroidStar::DroidStar(QObject *parent) :
     QObject(parent),
@@ -65,6 +83,8 @@ DroidStar::DroidStar(QObject *parent) :
     m_modelchange = false;
     connect_status = Mode::DISCONNECTED;
     m_settings = new QSettings(QSettings::IniFormat, QSettings::UserScope, "dudetronics", "droidstar", this);
+    qDebug() << "QSettings file:" << m_settings->fileName()
+             << "exists:" << QFileInfo(m_settings->fileName()).exists();
     config_path = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
    
         connect(m_reconnectTimer, &QTimer::timeout, this, &DroidStar::attempt_reconnect);
@@ -98,13 +118,22 @@ DroidStar::DroidStar(QObject *parent) :
     qDebug() << "Kernel type: " << QSysInfo::kernelType();
     qDebug() << "Kernel version: " << QSysInfo::kernelVersion();
     qDebug() << "Software version: " << VERSION_NUMBER;
+    
+#ifdef Q_OS_IOS
+    // Register this instance for PTT callbacks from remote commands (headphones, Control Center)
+    s_droidStarInstance = this;
+    setPTTCallbacks(pttPressCallback, pttReleaseCallback);
+#endif
 }
 
 DroidStar::~DroidStar()
 {
-    
-        delete m_reconnectTimer;
-        delete m_keepAliveTimer;
+#ifdef Q_OS_IOS
+    s_droidStarInstance = nullptr;
+    setAudioConnectionState(false, "", "");
+#endif
+    delete m_reconnectTimer;
+    delete m_keepAliveTimer;
     delete m_audioEngine;
 }
 #ifdef Q_OS_ANDROID
@@ -199,40 +228,54 @@ void DroidStar::url_downloaded(QString url)
 void DroidStar::file_downloaded(QString filename)
 {
     emit update_log("Updated " + filename);
-    {
-        if(filename == "dplus.txt" && m_protocol == "REF"){
-            process_dstar_hosts(m_protocol);
-        }
-        else if(filename == "dextra.txt" && m_protocol == "XRF"){
-            process_dstar_hosts(m_protocol);
-        }
-        else if(filename == "dcs.txt" && m_protocol == "DCS"){
-            process_dstar_hosts(m_protocol);
-        }
-        else if(filename == "YSFHosts.txt" && m_protocol == "YSF"){
-            process_ysf_hosts();
-        }
-        else if(filename == "FCSHosts.txt" && m_protocol == "FCS"){
-            process_fcs_rooms();
-        }
-        else if(filename == "P25Hosts.txt" && m_protocol == "P25"){
-            process_p25_hosts();
-        }
-        else if(filename == "DMRHosts.txt" && m_protocol == "DMR"){
-            process_dmr_hosts();
-        }
-        else if(filename == "NXDNHosts.txt" && m_protocol == "NXDN"){
-            process_nxdn_hosts();
-        }
-        else if(filename == "M17Hosts-full.csv" && m_protocol == "M17"){
-            process_m17_hosts();
-        }
-        else if(filename == "DMRIDs.dat"){
-            process_dmr_ids();
-        }
-        else if(filename == "NXDN.csv"){
-            process_nxdn_ids();
-        }
+    bool hostsChangedForCurrentMode = false;
+    if(filename == "dplus.txt" && m_protocol == "REF"){
+        process_dstar_hosts(m_protocol);
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "dextra.txt" && m_protocol == "XRF"){
+        process_dstar_hosts(m_protocol);
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "dcs.txt" && m_protocol == "DCS"){
+        process_dstar_hosts(m_protocol);
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "YSFHosts.txt" && m_protocol == "YSF"){
+        process_ysf_hosts();
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "FCSHosts.txt" && m_protocol == "FCS"){
+        process_fcs_rooms();
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "P25Hosts.txt" && m_protocol == "P25"){
+        process_p25_hosts();
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "DMRHosts.txt" && m_protocol == "DMR"){
+        process_dmr_hosts();
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "NXDNHosts.txt" && m_protocol == "NXDN"){
+        process_nxdn_hosts();
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "M17Hosts-full.csv" && m_protocol == "M17"){
+        process_m17_hosts();
+        hostsChangedForCurrentMode = true;
+    }
+    else if(filename == "DMRIDs.dat"){
+        process_dmr_ids();
+    }
+    else if(filename == "NXDN.csv"){
+        process_nxdn_ids();
+    }
+
+    // Critical: when host files are downloaded/updated asynchronously, refresh QML bindings.
+    // Legacy UI effectively refreshed hosts on mode change; new UI needs an explicit signal.
+    if (hostsChangedForCurrentMode) {
+        emit mode_changed();
     }
 }
 
@@ -270,6 +313,14 @@ void DroidStar::tts_text_changed(QString ttstxt)
 
 void DroidStar::process_connect()
 {
+    qDebug() << "process_connect() called:"
+             << "connect_status=" << connect_status
+             << "protocol=" << m_protocol
+             << "callsign=" << m_callsign
+             << "dmrid=" << m_dmrid
+             << "module=" << QChar(m_module)
+             << "saved_dmrhost=" << m_saved_dmrhost;
+
     if(connect_status != Mode::DISCONNECTED){
         connect_status = Mode::DISCONNECTED;
         m_modethread->quit();
@@ -279,12 +330,18 @@ void DroidStar::process_connect()
         m_data4.clear();
         m_data5.clear();
         m_data6.clear();
+#ifdef Q_OS_IOS
+        // Notify audio session manager of disconnection (clears Now Playing)
+        setAudioConnectionState(false, "", "");
+#endif
         emit connect_status_changed(0);
         emit update_log("Disconnected");
     }
     else{
 #ifdef Q_OS_IOS
         MicPermission::check_permission();
+        // Set up audio session EARLY so background mode is configured before audio starts.
+        setupAVAudioSession();
 #endif
         if(m_protocol == "REF"){
             m_refname = m_saved_refhost;
@@ -316,6 +373,11 @@ void DroidStar::process_connect()
         else if(m_protocol == "IAX"){
             m_refname = m_saved_iaxhost;
         }
+
+        qDebug() << "process_connect() using refname=" << m_refname
+                 << "hostmap_contains=" << m_hostmap.contains(m_refname)
+                 << "hostsmodel_count=" << m_hostsmodel.size();
+
         m_keepAliveTimer->start();
         emit connect_status_changed(1);
         connect_status = Mode::CONNECTING;
@@ -337,6 +399,7 @@ void DroidStar::process_connect()
         }
         else{
             m_errortxt = "Invalid host selection";
+            emit update_log(m_errortxt);
             connect_status = Mode::DISCONNECTED;
             emit connect_status_changed(5);
             return;
@@ -613,11 +676,21 @@ void DroidStar::process_mode_change(const QString &m)
         m_label5 = "";
         m_label6 = "";
     }
+    // IMPORTANT:
+    // During startup, process_settings() calls process_mode_change() while other fields
+    // (CALLSIGN/DMRID/DMRHOST/etc) have not yet been loaded into member variables.
+    // Calling save_settings() here would overwrite the existing ini with empty defaults.
+    if (m_settings_processed) {
+        save_settings();
+    }
     emit mode_changed();
 }
 
 void DroidStar::save_settings()
 {
+    // Ensure a sane module gets persisted (avoid writing NUL which later becomes "@String(\\0)")
+    if (m_module == 0) m_module = 'A';
+
     //m_settings->setValue("PLAYBACK", ui->comboPlayback->currentText());
     //m_settings->setValue("CAPTURE", ui->comboCapture->currentText());
     m_settings->setValue("IPV6", m_ipv6 ? "true" : "false");
@@ -678,10 +751,19 @@ void DroidStar::save_settings()
     m_settings->setValue("ModemTxInvert", m_modemTxInvert ? "true" : "false");
     m_settings->setValue("ModemRxInvert", m_modemRxInvert ? "true" : "false");
     m_settings->setValue("ModemPTTInvert", m_modemPTTInvert ? "true" : "false");
+
+    // Force flush to disk so iOS reliably persists immediately.
+    m_settings->sync();
 }
 
 void DroidStar::process_settings()
 {
+    // Ensure we read the latest values from disk (important on mobile sandboxes).
+    m_settings->sync();
+
+    // We are loading settings now; prevent write-back until fully loaded.
+    m_settings_processed = false;
+
     m_ipv6 = (m_settings->value("IPV6").toString().simplified() == "true") ? true : false;
     process_mode_change(m_settings->value("MODE").toString().simplified());
     m_saved_refhost = m_settings->value("REFHOST").toString().simplified();
@@ -694,7 +776,11 @@ void DroidStar::process_settings()
     m_saved_nxdnhost = m_settings->value("NXDNHOST").toString().simplified();
     m_saved_m17host = m_settings->value("M17HOST").toString().simplified();
     m_saved_iaxhost = m_settings->value("IAXHOST").toString().simplified();
-    m_module = m_settings->value("MODULE").toString().toStdString()[0];
+    {
+        const QString moduleStr = m_settings->value("MODULE", "A").toString();
+        if (!moduleStr.isEmpty() && moduleStr.at(0).unicode() != 0) m_module = moduleStr.toStdString()[0];
+        else m_module = 'A';
+    }
     m_callsign = m_settings->value("CALLSIGN").toString().simplified();
     m_dmrid = m_settings->value("DMRID").toString().simplified().toUInt();
     m_essid = m_settings->value("ESSID").toString().simplified().toUInt();
@@ -715,10 +801,19 @@ void DroidStar::process_settings()
     m_rptr1 = m_settings->value("RPTR1").toString().simplified();
     m_rptr2 = m_settings->value("RPTR2").toString().simplified();
     m_txtimeout = m_settings->value("TXTIMEOUT", "300").toString().simplified().toUInt();
+    // IMPORTANT: On a fresh install (no settings yet), default to TX toggle mode enabled.
     m_toggletx = (m_settings->value("TXTOGGLE", "true").toString().simplified() == "true") ? true : false;
     m_dstarusertxt = m_settings->value("USRTXT").toString().simplified();
     m_xrf2ref = (m_settings->value("XRF2REF").toString().simplified() == "true") ? true : false;
     m_localhosts = m_settings->value("LOCALHOSTS").toString();
+
+    // Treat empty-but-present values as missing (QSettings defaults apply only to missing keys).
+    if (m_latitude.isEmpty()) m_latitude = "0";
+    if (m_longitude.isEmpty()) m_longitude = "0";
+    if (m_freq.isEmpty() || m_freq.toUInt() == 0) m_freq = "438800000";
+    if (m_url.isEmpty()) m_url = "www.qrz.com";
+    if (m_swid.isEmpty()) m_swid = "20200922";
+    if (m_pkgid.isEmpty()) m_pkgid = "MMDVM_MMDVM_HS_Hat";
 
     m_modemRxFreq = m_settings->value("ModemRxFreq", "438800000").toString().simplified();
     m_modemTxFreq = m_settings->value("ModemTxFreq", "438800000").toString().simplified();
@@ -741,6 +836,13 @@ void DroidStar::process_settings()
     m_modemTxInvert = (m_settings->value("ModemTxInvert", "true").toString().simplified() == "true") ? true : false;
     m_modemRxInvert = (m_settings->value("ModemRxInvert", "false").toString().simplified() == "true") ? true : false;
     m_modemPTTInvert = (m_settings->value("ModemPTTInvert", "false").toString().simplified() == "true") ? true : false;
+
+    qDebug() << "process_settings loaded:"
+             << "CALLSIGN=" << m_callsign
+             << "DMRID=" << m_dmrid
+             << "MODE=" << m_protocol
+             << "DMRHOST=" << m_saved_dmrhost;
+    m_settings_processed = true;
     emit update_settings();
 }
 
@@ -1277,8 +1379,31 @@ void DroidStar::check_host_files()
 
 void DroidStar::update_data(Mode::MODEINFO info)
 {
-    if((connect_status == Mode::CONNECTING) && (info.status == Mode::DISCONNECTED)){
-        process_connect();
+    // Helpful status tracing for debugging connect/TX issues
+    if (connect_status == Mode::CONNECTING) {
+        qDebug() << "update_data: CONNECTING, mode_status=" << info.status;
+    }
+    // If the Mode reports DISCONNECTED while we are trying to connect, treat it as a connect failure.
+    // The previous behavior called process_connect(), which toggled into a normal "Disconnected" path
+    // and hid the actual failure from the UI.
+    if ((connect_status == Mode::CONNECTING) && (info.status == Mode::DISCONNECTED)) {
+        qDebug() << "Connect attempt failed (Mode returned DISCONNECTED)";
+        m_errortxt = "Connection failed";
+        connect_status = Mode::DISCONNECTED;
+        if (m_modethread) {
+            m_modethread->quit();
+        }
+        m_data1.clear();
+        m_data2.clear();
+        m_data3.clear();
+        m_data4.clear();
+        m_data5.clear();
+        m_data6.clear();
+#ifdef Q_OS_IOS
+        setAudioConnectionState(false, "", "");
+#endif
+        emit update_log(m_errortxt);
+        emit connect_status_changed(5);
         return;
     }
 
@@ -1293,6 +1418,10 @@ void DroidStar::update_data(Mode::MODEINFO info)
         if(m_urcall.isEmpty()) set_urcall("CQCQCQ");
         if(m_rptr1.isEmpty()) set_rptr1(m_callsign + " " + m_module);
         emit update_log("Connected to " + m_protocol + " " + m_refname + " " + m_host + ":" + QString::number(m_port));
+#ifdef Q_OS_IOS
+        // Notify audio session manager of connection (enables Now Playing & keep-alive)
+        setAudioConnectionState(true, m_refname.toUtf8().constData(), m_protocol.toUtf8().constData());
+#endif
 
         if(info.sw_vocoder_loaded){
             emit update_log("Vocoder plugin loaded");
@@ -1451,6 +1580,18 @@ void DroidStar::update_data(Mode::MODEINFO info)
             emit update_log(t + " " + m_protocol + " RX lost id: " + QString::number(info.streamid, 16) + " src: " + info.src + " dst: " + info.gw2);
         }
     }
+    
+#ifdef Q_OS_IOS
+    // Update Now Playing / Lock Screen with current RX info
+    if (info.stream_state == Mode::STREAM_IDLE) {
+        clearAudioRXState();
+    } else if (!m_data1.isEmpty()) {
+        // m_data1 typically contains callsign, pass it to Now Playing
+        // Note: Name and country lookups happen in QML, this is for basic callsign display
+        setAudioRXState(m_data1.toUtf8().constData(), "", "");
+    }
+#endif
+    
     emit update_data();
 }
 
@@ -1467,11 +1608,17 @@ void DroidStar::set_input_volume(qreal v)
 
 void DroidStar::press_tx()
 {
+#ifdef Q_OS_IOS
+    setAudioTXState(true);
+#endif
     emit tx_pressed();
 }
 
 void DroidStar::release_tx()
 {
+#ifdef Q_OS_IOS
+    setAudioTXState(false);
+#endif
     emit tx_released();
 }
 
@@ -1493,6 +1640,19 @@ void DroidStar::addRecentTGID(const QString& tgid) {
 
     settings.setValue("tgids", tgids);
     settings.endGroup();
+}
+
+void DroidStar::updateNowPlayingRX(const QString& callsign, const QString& name, const QString& country)
+{
+#ifdef Q_OS_IOS
+    setAudioRXState(callsign.toUtf8().constData(), 
+                    name.toUtf8().constData(), 
+                    country.toUtf8().constData());
+#else
+    Q_UNUSED(callsign);
+    Q_UNUSED(name);
+    Q_UNUSED(country);
+#endif
 }
 
 QStringList DroidStar::loadRecentTGIDs() const {
@@ -1528,7 +1688,12 @@ void DroidStar::handle_background_state() {
     qDebug() << "App has entered background.";
     if (connect_status == Mode::CONNECTED_RW) {
         m_keepAliveTimer->stop();
-       
+#ifdef Q_OS_IOS
+        // Critical: set up audio session for background playback and start a background task
+        // so iOS doesn't suspend us while audio is playing.
+        setupBackgroundAudio();
+        renewBackgroundTask();
+#endif
     }
 }
 
@@ -1582,10 +1747,14 @@ void DroidStar::setCaptureDevice(const QString &deviceName) {
 // Function to handle returning to the foreground
 void DroidStar::handle_foreground_state() {
     qDebug() << "App has returned to foreground.";
-    if (connect_status == Mode::DISCONNECTED) {
-        process_connect(); // Reconnect when coming back to the foreground
+#ifdef Q_OS_IOS
+    // Re-setup audio session to ensure correct routing after returning from background.
+    setupAVAudioSession();
+#endif
+    if (connect_status == Mode::CONNECTED_RW) {
+        // Restart keep-alive timer if still connected
+        m_keepAliveTimer->start();
     }
-    m_keepAliveTimer->start();
 }
 
 void DroidStar::setup_state_change_listeners() {

@@ -89,6 +89,31 @@ private:
     bool m_agc;
     float m_srm; // sample rate multiplier for macOS HACK
 
+    // Audio IO rates
+    int m_captureDeviceRate { 8000 };
+    int m_playbackDeviceRate { 8000 };
+
+    // Capture resampling state: deviceRate -> 8000 Hz (mono)
+    qint64 m_capStreamIndex { -1 };
+    double m_capNextOutPos { 0.0 }; // in input-sample index units
+    float m_capPrevSample { 0.0f };
+
+    // Playback resampling state: 8000 Hz -> deviceRate (mono)
+    qint64 m_playStreamIndex { -1 };
+    double m_playNextOutPos { 0.0 }; // in input-sample index units (8 kHz domain)
+    float m_playPrevSample { 0.0f };
+
+    // Simple capture low-pass (to reduce aliasing before downsampling)
+    struct Biquad {
+        float b0 { 1.0f }, b1 { 0.0f }, b2 { 0.0f };
+        float a1 { 0.0f }, a2 { 0.0f };
+        float z1 { 0.0f }, z2 { 0.0f };
+    };
+    Biquad m_capLowpass;
+
+    static Biquad makeLowpassBiquad(float fs, float fc, float Q);
+    static float biquadProcess(Biquad &bq, float x);
+
     float m_audio_out_temp_buf[320];   //!< output of decoder
     float *m_audio_out_temp_buf_p;
 

@@ -1,3 +1,20 @@
+/*
+    Copyright (C) 2025 Rohith Namboothiri
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #ifndef VUIDUPDATER_H
 #define VUIDUPDATER_H
 
@@ -30,6 +47,7 @@ public:
     Q_INVOKABLE void fetchFirstNameFromAPI(unsigned int data1)
     {
         if (!data1) return;
+        m_lastRequestedId = data1;
 
         QUrl url("https://radioid.net/api/users?id=" + QString::number(data1));
         QNetworkRequest request(url);
@@ -70,6 +88,8 @@ public:
 signals:
     void fetchedFirstNameChanged(const QString &firstName);
     void fetchedCountryChanged(const QString &country);
+    // Emits one complete record for callers (e.g., realtime QSO logger in App2026.qml).
+    void userLookupReady(unsigned int dmrId, const QString &callsign, const QString &name, const QString &country);
 
 private slots:
     void onNetworkReply(QNetworkReply *reply)
@@ -118,12 +138,23 @@ private slots:
         }
 
         QString country = first.value("country").toString();
+        QString callsign = first.value("callsign").toString();
+        unsigned int dmrId = first.value("radio_id").toInt();
+        if (!dmrId) {
+            // Some responses use "id"
+            dmrId = first.value("id").toInt();
+        }
+        if (!dmrId) {
+            // Fall back to what we requested (best-effort)
+            dmrId = m_lastRequestedId;
+        }
 
         qDebug() << "Parsed name:" << name;
         qDebug() << "Parsed country:" << country;
 
         setFetchedFirstName(name);
         setFetchedCountry(country);
+        emit userLookupReady(dmrId, callsign, name, m_fetchedCountry);
 
         reply->deleteLater();
     }
@@ -131,6 +162,7 @@ private slots:
 private:
     QString m_fetchedFirstName;
     QString m_fetchedCountry;
+    unsigned int m_lastRequestedId = 0;
     QNetworkAccessManager *networkAccessManager;
 };
 

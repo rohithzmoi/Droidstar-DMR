@@ -12,7 +12,7 @@ ICON = images/droidstar.icns
 macx:LIBS += -framework AVFoundation
 macx:QMAKE_MACOSX_DEPLOYMENT_TARGET = 12.0
 macx:QMAKE_INFO_PLIST = Info.plist.mac
-ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit
+ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit -framework MobileCoreServices -framework MediaPlayer -lz
 ios:QMAKE_IOS_DEPLOYMENT_TARGET=14.0
 ios:QMAKE_TARGET_BUNDLE_PREFIX = org.dudetronics
 ios:QMAKE_BUNDLE = droidstar
@@ -81,7 +81,8 @@ SOURCES += \
         p25.cpp \
         ref.cpp \
         xrf.cpp \
-        ysf.cpp
+        ysf.cpp \
+        LiveActivityQtBridge.cpp
 # Android-specific source files
 android:SOURCES += androidserialport.cpp
 
@@ -91,6 +92,7 @@ android:SOURCES += androidserialport.cpp
 # Objective-C source files for macOS and iOS
 macx:OBJECTIVE_SOURCES += micpermission.mm
 ios:OBJECTIVE_SOURCES += micpermission.mm AudioSessionManager.mm
+ios:OBJECTIVE_SOURCES += ios_live_activity.mm
 
 # Enable background audio mode for iOS
 ios:QMAKE_MAC_XCODE_SETTINGS += QMAKE_IOS_BACKGROUND_MODES = YES
@@ -100,11 +102,45 @@ ios:QMAKE_INFO_PLIST_EXTRA += "    <string>audio</string>"
 ios:QMAKE_INFO_PLIST_EXTRA += "</array>"
 ios:QMAKE_CXXFLAGS += -fobjc-arc
 
+# Live Activities / Dynamic Island require Swift compilation on iOS.
+# We include LiveActivityManager.swift here so it is ALWAYS part of the generated Xcode target
+# after running iOS qmake (no manual "Target Membership" re-adding each build).
+#
+# IMPORTANT:
+# - Generate the Xcode project with the iOS qmake:
+#   ./6.6.1/ios/bin/qmake ../DroidStar.pro
+# - The Widget UI is NOT in this file anymore (moved out to avoid module conflicts).
+ios:SOURCES += LiveActivityManager.swift
+ios:SOURCES += DroidStarActivityAttributes.swift
+
+# Xcode Swift build settings (use KEY=VALUE to avoid qmake tokenization issues)
+ios:QMAKE_MAC_XCODE_SETTINGS += SWIFT_VERSION=5.0
+ios:QMAKE_MAC_XCODE_SETTINGS += CLANG_ENABLE_MODULES=YES
+ios:QMAKE_MAC_XCODE_SETTINGS += ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES=YES
+ios:QMAKE_MAC_XCODE_SETTINGS += EMBEDDED_CONTENT_CONTAINS_SWIFT=YES
+
 
                          
 
 
-resources.files = main.qml AboutTab.qml HostsTab.qml LogTab.qml MainTab.qml SettingsTab.qml fontawesome-webfont.ttf QsoTab.qml
+resources.files = main.qml AboutTab.qml HostsTab.qml LogTab.qml MainTab.qml SettingsTab.qml fontawesome-webfont.ttf QsoTab.qml \
+                  qtquickcontrols2.conf \
+                  images/droidstar.png \
+                  qml/AppShell.qml \
+                  qml/theme/Theme.qml \
+                  qml/components/AppCard.qml \
+                  qml/components/IconTabButton.qml \
+                  ui2026/App2026.qml \
+                  ui2026/theme/Tokens.qml \
+                  ui2026/components/AppCard.qml \
+                  ui2026/components/DrawerItem.qml \
+                  ui2026/components/CollapsibleSection.qml \
+                  ui2026/pages/MainPage.qml \
+                  ui2026/pages/SettingsPage.qml \
+                  ui2026/pages/QsoPage.qml \
+                  ui2026/pages/LogPage.qml \
+                  ui2026/pages/HostsPage.qml \
+                  ui2026/pages/AboutPage.qml
 resources.prefix = /$${TARGET}
 RESOURCES += resources
 
@@ -178,7 +214,9 @@ HEADERS += \
 	ref.h \
 	vocoder_plugin.h \
 	xrf.h \
-	ysf.h
+	ysf.h \
+        LiveActivityQtBridge.h \
+        ios_live_activity.h
 
 !contains(DEFINES, USE_EXTERNAL_CODEC2){
 HEADERS += \

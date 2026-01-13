@@ -42,6 +42,7 @@ public:
     Q_INVOKABLE void addRecentTGID(const QString& tgid);
     Q_INVOKABLE QStringList loadRecentTGIDs() const;
     Q_INVOKABLE void clearRecentTGIDs();
+    Q_INVOKABLE void updateNowPlayingRX(const QString& callsign, const QString& name, const QString& country);
     void setup_state_change_listeners();
     
 

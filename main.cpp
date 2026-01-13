@@ -9,14 +9,17 @@
 #include "vuidupdater.h"  // Include the new header
 #include "LogHandler.h"
 #include "AudioSessionManager.h"
+#include "LiveActivityQtBridge.h"
 
 
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
-    QQuickStyle::setStyle("Fusion");
-    app.setWindowIcon(QIcon(":/images/droidstar.png"));
+    // Use Material styling for a modern dark UI (Fusion defaults to a light palette).
+    QQuickStyle::setStyle("Material");
+    // QRC icon (registered via `DroidStar.pro` resources.files)
+    app.setWindowIcon(QIcon(":/DroidStar/images/droidstar.png"));
     
     // Register DroidStar type
     qmlRegisterType<DroidStar>("org.dudetronics.droidstar", 1, 0, "DroidStar");
@@ -35,6 +38,10 @@ int main(int argc, char *argv[])
 
     LogHandler logHandler;
     engine.rootContext()->setContextProperty("logHandler", &logHandler);
+
+    // iOS Dynamic Island / Live Activity bridge (no-op on non-iOS)
+    LiveActivityQtBridge liveActivity;
+    engine.rootContext()->setContextProperty("liveActivity", &liveActivity);
 
     
     

@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QDesktopServices>
 #include <QtConcurrent> // Include for running asynchronous tasks
+#include <QMetaObject>
 
 LogHandler::LogHandler(QObject *parent) : QObject(parent)
 {
@@ -33,7 +34,11 @@ QString LogHandler::getFilePath(const QString &fileName) const
 void LogHandler::saveLogAsync(const QString &fileName, const QJsonArray &logData)
 {
     QtConcurrent::run([this, fileName, logData]() {
-        saveLog(fileName, logData);
+        const bool ok = saveLog(fileName, logData);
+        // Ensure QML observers run on the UI thread
+        QMetaObject::invokeMethod(this, [this, fileName, ok]() {
+            if (ok) emit logSaved(fileName);
+        }, Qt::QueuedConnection);
     });
 }
 
@@ -71,6 +76,10 @@ QJsonArray LogHandler::loadLog(const QString &fileName)
     QJsonArray logData;
 
     QFile file(filePath);
+    // If the log doesn't exist yet, treat as empty without logging an error.
+    if (!file.exists()) {
+        return logData;
+    }
     if (!file.open(QIODevice::ReadOnly)) {
         qDebug() << "Failed to open file for reading:" << file.errorString();
         return logData;
@@ -96,6 +105,9 @@ bool LogHandler::clearLog(const QString &fileName)
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         file.close();
         qDebug() << "Log cleared successfully.";
+        QMetaObject::invokeMethod(this, [this, fileName]() {
+            emit logCleared(fileName);
+        }, Qt::QueuedConnection);
         return true;
     }
     qDebug() << "Failed to clear log:" << file.errorString();

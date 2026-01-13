@@ -15,33 +15,37 @@
     along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
-
 #ifndef AUDIOSESSIONMANAGER_H
 #define AUDIOSESSIONMANAGER_H
 
-class AudioSessionManager
-{
-public:
-    AudioSessionManager();
-    ~AudioSessionManager();
-    void startBackgroundAudio();
-    void stopBackgroundAudio();
-};
-
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-bool isAppInBackground();
-void setupAVAudioSession();
-void deactivateAVAudioSession();
-void setupBackgroundAudio();
-void deactivateBackgroundAudio();
-void renewBackgroundTask();
-void setPreferredInputDevice();
+
+// Audio session management
+void setupAVAudioSession(void);
+void deactivateAVAudioSession(void);
+void setupBackgroundAudio(void);
+void deactivateBackgroundAudio(void);
+void renewBackgroundTask(void);
+void setPreferredInputDevice(void);
+bool isAppInBackground(void);
+
+// Now Playing / Lock Screen / Control Center state updates
+void setAudioConnectionState(bool connected, const char *host, const char *mode);
+void setAudioRXState(const char *callsign, const char *name, const char *country);
+void setAudioTXState(bool transmitting);
+void clearAudioRXState(void);
+void updateNowPlayingInfo(void);
+
+// Remote command callbacks (for PTT from headphones/Control Center)
+typedef void (*PTTCallback)(void);
+void setPTTCallbacks(PTTCallback pressCallback, PTTCallback releaseCallback);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif // AUDIOSESSIONMANAGER_H

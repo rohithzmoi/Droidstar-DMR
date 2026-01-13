@@ -12,9 +12,27 @@ This project is a modified version of the [original Droidstar App](https://githu
 
 This project uses QT 6.7.2
 
-## New Features
+## What's New in the Latest Update
 
-I am excited to announce the release of several new features and improvements:
+I'm thrilled to announce a major update with significant improvements and highly requested features:
+
+- **Complete Major Design Overhaul**: Fresh UI, smoother navigation, and a much cleaner overall experience that modernizes the entire app.
+
+- **Dynamic Island Support for iOS**: One of the most requested features! You can now monitor activity and status right from the Dynamic Island, providing at-a-glance information without opening the app.
+
+- **iPhone Notification Center Display**: Real-time TX/RX status updates are now visible in the notification center, keeping you informed even when multitasking.
+
+- **Lock Screen TX/RX Display**: Monitor transmission and reception activity directly from your iPhone's lock screen for ultimate convenience.
+
+- **Control QSO Log Length**: Adjust how many entries you want to keep directly from the QSO page without digging into settings. Customize your log management with ease.
+
+- **Toggle Self-TX Logging**: A small but powerful quality-of-life improvement for those who prefer cleaner logs. Turn self-transmission logging on or off based on your preference.
+
+And this is just the beginning. More updates are coming soon, including a few surprises I think you'll really enjoy!
+
+## Previous Features
+
+I am excited to share several features and improvements that have been previously released:
 
 - **Automatic Operator Information Display**: The app now automatically fetches the operator's first name (referred to as the "Handle") based on their DMR ID and displays it below the "Call Sign." The operator's "Country" is also displayed next to the "Handle."
 
