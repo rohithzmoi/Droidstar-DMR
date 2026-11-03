@@ -2,6 +2,7 @@
  * Project 25 IMBE Encoder/Decoder Fixed-Point implementation
  * Developed by Pavel Yazev E-mail: pyazev@gmail.com
  * Version 1.0 (c) Copyright 2009
+ * Modified Copyright (C) 2024-2026 Rohith Namboothiri
  * 
  * This is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by
@@ -67,6 +68,33 @@ void imbe_vocoder_impl::encode(IMBE_PARAM *imbe_param, Word16 *frame_vector, Wor
 		
 	dc_rmv(snd, &pitch_ref_buf[PITCH_EST_BUF_SIZE - FRAME], &dc_rmv_mem, FRAME);
 	pe_lpf(&pitch_ref_buf[PITCH_EST_BUF_SIZE - FRAME], &pitch_est_buf[PITCH_EST_BUF_SIZE - FRAME], pe_lpf_mem, FRAME);
+
+	// Keep pitch estimator state clean and output zero spectral amplitudes
+	// when the current analysis window is silent.
+	bool windowSilent = true;
+	for (i = 40; i < 260; i++) {
+		if (pitch_ref_buf[i] > 20 || pitch_ref_buf[i] < -20) {
+			windowSilent = false;
+			break;
+		}
+	}
+	if (windowSilent) {
+		pitch_est_init();
+		imbe_param->pitch = 158;
+		imbe_param->ref_pitch = 158 << 7;
+		imbe_param->fund_freq = 0x03333333;
+		imbe_param->num_harms = 30;
+		imbe_param->num_bands = 10;
+		imbe_param->l_uv = 30;
+		for (i = 0; i < NUM_HARMS_MAX; i++) {
+			imbe_param->sa[i] = 0;
+			imbe_param->v_uv_dsn[i] = 0;
+		}
+		for (i = 0; i < 8; i++) {
+			frame_vector[i] = 0;
+		}
+		return;
+	}
 
 	pitch_est(imbe_param, pitch_est_buf);
 

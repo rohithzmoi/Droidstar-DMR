@@ -28,6 +28,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QHash>
 
 class VUIDUpdater : public QObject
 {
@@ -49,11 +50,19 @@ public:
         if (!data1) return;
         m_lastRequestedId = data1;
 
+        auto it = m_cache.constFind(data1);
+        if (it != m_cache.constEnd()) {
+            const CachedUser cached = it.value();
+            setFetchedFirstName(cached.name);
+            setFetchedCountry(cached.country);
+            emit userLookupReady(data1, cached.callsign, cached.name, m_fetchedCountry);
+            return;
+        }
+
         QUrl url("https://radioid.net/api/users?id=" + QString::number(data1));
         QNetworkRequest request(url);
-
-        // Keep-Alive is optional; not harmful
         request.setRawHeader("Connection", "Keep-Alive");
+        request.setTransferTimeout(8000);
 
         networkAccessManager->get(request);
     }
@@ -63,10 +72,8 @@ public:
 
     void setFetchedFirstName(const QString &firstName)
     {
-        if (m_fetchedFirstName == firstName) return;
         m_fetchedFirstName = firstName;
         emit fetchedFirstNameChanged(m_fetchedFirstName);
-        qDebug() << "Emitting fetchedFirstNameChanged signal with name:" << m_fetchedFirstName;
     }
 
     void setFetchedCountry(const QString &country)
@@ -79,10 +86,8 @@ public:
             modifiedCountry = "UK";
         }
 
-        if (m_fetchedCountry == modifiedCountry) return;
         m_fetchedCountry = modifiedCountry;
         emit fetchedCountryChanged(m_fetchedCountry);
-        qDebug() << "Emitting fetchedCountryChanged signal with country:" << m_fetchedCountry;
     }
 
 signals:
@@ -154,12 +159,24 @@ private slots:
 
         setFetchedFirstName(name);
         setFetchedCountry(country);
+        if (dmrId > 0) {
+            if (m_cache.size() >= 1024) {
+                m_cache.clear();
+            }
+            m_cache.insert(dmrId, CachedUser{callsign, name, country});
+        }
         emit userLookupReady(dmrId, callsign, name, m_fetchedCountry);
 
         reply->deleteLater();
     }
 
 private:
+    struct CachedUser {
+        QString callsign;
+        QString name;
+        QString country;
+    };
+    QHash<unsigned int, CachedUser> m_cache;
     QString m_fetchedFirstName;
     QString m_fetchedCountry;
     unsigned int m_lastRequestedId = 0;

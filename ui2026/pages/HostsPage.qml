@@ -20,65 +20,125 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 import "../components"
+import "../theme"
 
 Page {
     id: page
     title: qsTr("Hosts")
-    padding: 12
+    padding: 0
 
+    property var app: null
     required property var droidstarRef
     property string hostsText: ""
 
-    header: ToolBar {
-        RowLayout {
-            anchors.fill: parent
-            Label { text: page.title; Layout.fillWidth: true; leftPadding: 12 }
-            Button {
-                text: qsTr("Save")
-                onClicked: page.droidstarRef.update_custom_hosts(editor.text)
-                rightPadding: 12
+    property string _savedText: ""
+    readonly property bool dirty: editor.text !== _savedText
+
+    Tokens { id: t }
+
+    background: Rectangle { color: t.bg }
+
+    function save(silent) {
+        if (!page.droidstarRef) return
+        page.droidstarRef.update_custom_hosts(editor.text)
+        page._savedText = editor.text
+        if (!silent && page.app) page.app.notify(qsTr("Custom hosts saved."), "", null, "success")
+    }
+
+    onVisibleChanged: {
+        if (!visible && page.dirty) {
+            page.save(true)
+        }
+    }
+
+    Component.onCompleted: {
+        editor.text = page.hostsText
+        page._savedText = page.hostsText
+    }
+
+    property Component headerActions: Component {
+        Row {
+            HeaderAction {
+                glyph: "\uf0e2"
+                label: qsTr("Revert")
+                showLabel: page.width >= 560
+                visible: page.dirty
+                onClicked: editor.text = page._savedText
+            }
+            HeaderAction {
+                glyph: "\uf0c7"
+                label: page.dirty ? qsTr("Save") : qsTr("Saved")
+                showLabel: true
+                tone: page.dirty ? t.accent : t.textMuted
+                enabled: page.dirty
+                onClicked: page.save(false)
             }
         }
     }
 
-    ScrollView {
-        anchors.fill: parent
-        contentWidth: availableWidth
+    ColumnLayout {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: 12
+        anchors.bottomMargin: 12
+        width: Math.min(parent.width - 20, t.maxContentWidth)
+        spacing: 12
 
-        ColumnLayout {
-            width: parent.width
-            spacing: 12
+        CollapsibleSection {
+            title: qsTr("Custom host file format")
+            expanded: page.height > 560
 
-            AppCard {
-                Layout.fillWidth: true
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 6
-                    Label { text: qsTr("Custom host file format"); font.bold: true }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        opacity: 0.85
-                        text: qsTr("<mode> <name> <host> <port> <username (optional)> <password (optional)>\n"
-                                   + "Example: REF REF123 192.168.1.1 20001\n"
-                                   + "Example: DMR MyNet 192.168.1.1 62030 passw0rd\n"
-                                   + "Example: IAX 12345 192.168.1.1 4569 iaxclient iaxpass")
-                    }
-                }
+            content: Label {
+                wrapMode: Text.WordWrap
+                color: t.text
+                opacity: 0.85
+                font.pixelSize: t.fsSmall
+                textFormat: Text.PlainText
+                text: qsTr("<mode> <name> <host> <port> <username (optional)> <password (optional)>\n\n"
+                           + "Example: REF REF123 192.168.1.1 20001\n"
+                           + "Example: DMR MyNet 192.168.1.1 62030 passw0rd\n"
+                           + "Example: IAX 12345 192.168.1.1 4569 iaxclient iaxpass\n"
+                           + "Example: IAX 12345 wt\n"
+                           + "Example: IAX 12345 wt 4571")
             }
+        }
 
-            AppCard {
-                Layout.fillWidth: true
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 160
+            radius: t.rMd
+            color: t.surface2
+            border.color: editor.activeFocus ? t.accent : t.stroke
+            border.width: 1
+
+            ScrollView {
+                id: editorScroll
+                anchors.fill: parent
+                anchors.margins: 4
+                clip: true
+
                 TextArea {
                     id: editor
-                    width: parent.width
-                    wrapMode: TextArea.WordWrap
-                    placeholderText: qsTr("Paste or edit custom hosts here…")
-                    text: page.hostsText
-                    onEditingFinished: page.droidstarRef.update_custom_hosts(text)
+                    wrapMode: TextArea.WrapAnywhere
+                    placeholderText: qsTr("One host per line…")
+                    font.family: "monospace"
+                    font.pixelSize: 13
+                    color: t.text
+                    selectByMouse: true
+                    inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                    background: null
+                    onEditingFinished: if (page.dirty) page.save(true)
                 }
             }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: page.dirty ? qsTr("Unsaved changes") : qsTr("%1 lines").arg(editor.text === "" ? 0 : editor.text.split("\n").length)
+            color: page.dirty ? t.warning : t.textMuted
+            font.pixelSize: t.fsCaption
         }
     }
 }
-

@@ -10,12 +10,17 @@
 #include "LogHandler.h"
 #include "AudioSessionManager.h"
 #include "LiveActivityQtBridge.h"
+#include "TranscriptionEngine.h"
+#include "NetReminderManager.h"
 
 
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("dudetronics"));
+    QCoreApplication::setOrganizationDomain(QStringLiteral("dudetronics.org"));
+    QCoreApplication::setApplicationName(QStringLiteral("droidstar"));
     // Use Material styling for a modern dark UI (Fusion defaults to a light palette).
     QQuickStyle::setStyle("Material");
     // QRC icon (registered via `DroidStar.pro` resources.files)
@@ -25,6 +30,13 @@ int main(int argc, char *argv[])
     qmlRegisterType<DroidStar>("org.dudetronics.droidstar", 1, 0, "DroidStar");
   
     QQmlApplicationEngine engine;
+
+    // Local RX transcription engine & Ham Net Reminder manager
+    TranscriptionEngine transcriptionEngine;
+    engine.rootContext()->setContextProperty("transcriptionEngine", &transcriptionEngine);
+
+    NetReminderManager netReminderManager;
+    engine.rootContext()->setContextProperty("netReminderManager", &netReminderManager);
     
     // Create an instance of DroidStar
         DroidStar droidStarInstance;

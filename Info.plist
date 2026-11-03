@@ -59,20 +59,25 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>DroidStar uses Bluetooth to route audio to and from your wireless headset or earbuds.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>We need Bluetooth access to use your device's microphone.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>This app uses the microphone to transmit audio</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>You know you want to...</string>
+	<string>DroidStar uses your microphone for Push-to-Talk voice transmission.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>DroidStar uses on-device speech recognition for live transcription of incoming radio audio.</string>
 	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
 	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 		<string>fetch</string>
 		<string>processing</string>
-		<string>voip</string>
 		<string>bluetooth-central</string>
 	</array>
 	<key>UIFileSharingEnabled</key>

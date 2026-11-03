@@ -17,6 +17,6 @@ sips -z 256 256   "$icon" --out "$iconset"/icon_128x128@2x.png
 sips -z 256 256   "$icon" --out "$iconset"/icon_256x256.png
 sips -z 512 512   "$icon" --out "$iconset"/icon_256x256@2x.png
 sips -z 512 512   "$icon" --out "$iconset"/icon_512x512.png
-sips -z 1024 1024   "$icon" --out "$iconset"/icon_512x512@2.png
+sips -z 1024 1024 "$icon" --out "$iconset"/icon_512x512@2x.png
 
 iconutil -c icns "$iconset"

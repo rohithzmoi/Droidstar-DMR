@@ -25,6 +25,10 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wcast-function-type-mismatch"
+#endif
+
 static inline Class liveActivityManagerClass(void)
 {
     // Swift class runtime name can be "<Module>.<Class>" OR explicit @objc name.

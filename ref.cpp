@@ -29,7 +29,7 @@ const uint8_t MMDVM_DSTAR_EOT    = 0x13U;
 REF::REF()
 {
     m_mode = "REF";
-	m_attenuation = 5;
+	m_attenuation = 1;
 }
 
 REF::~REF()
@@ -46,10 +46,8 @@ void REF::process_udp()
     static int sd_txt_seq = 0;
     static int sd_gps_cnt = 0;
     static int sd_hdr_cnt = 0;
-    static int sd_debug_cnt = 0;
 	static char user_data[21];
     static QByteArray gps_data;
-    static uint8_t debug_data[64];
 
 	const uint8_t header[5] = {0x80,0x44,0x53,0x56,0x54};
 
@@ -99,15 +97,20 @@ void REF::process_udp()
 	if((m_modeinfo.status == CONNECTING) && (buf.size() == 0x08)){
 		if((memcmp(&buf.data()[4], "OKRW", 4) == 0) || (memcmp(&buf.data()[4], "OKRO", 4) == 0) || (memcmp(&buf.data()[4], "BUSY", 4) == 0)){
 			m_modeinfo.sw_vocoder_loaded = load_vocoder_plugin();
-			m_rxtimer = new QTimer();
+			m_rxtimer = new QTimer(this);
+			m_rxtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
-			m_txtimer = new QTimer();
+			m_txtimer = new QTimer(this);
+			m_txtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-			m_ping_timer = new QTimer();
+			m_ping_timer = new QTimer(this);
 			connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 			m_ping_timer->start(1000);
 			m_audio = new AudioEngine(m_audioin, m_audioout);
 			m_audio->init();
+			m_audio->set_agc(m_pendingAgc);
+			m_audio->set_input_volume(m_pendingInVol / m_attenuation);
+			m_audio->set_output_volume(m_pendingOutVol);
 
 			if(buf.data()[7] == 0x57){ //OKRW
 				m_modeinfo.status = CONNECTED_RW;
@@ -494,6 +497,10 @@ void REF::transmit()
 	int16_t pcm[160];
 	memset(ambe_frame, 0, 72);
 	memset(ambe, 0, 9);
+	if (!m_tx) {
+		send_frame(ambe);
+		return;
+	}
 #ifdef USE_FLITE
 	if(m_ttsid > 0){
 		for(int i = 0; i < 160; ++i){

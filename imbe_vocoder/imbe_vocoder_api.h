@@ -60,6 +60,7 @@ public:
     void imbe_decode(int16_t *frame_vector, int16_t *snd);
 	void encode_4400(int16_t *snd, uint8_t *imbe);
 	void decode_4400(int16_t *snd, uint8_t *imbe);
+    void reset_tx(void);
     const IMBE_PARAM* param(void);
 
 private:

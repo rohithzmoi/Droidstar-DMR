@@ -36,6 +36,8 @@ private:
 	QString m_config_path;
 	QNetworkAccessManager *m_qnam;
 	bool m_url;
+	QStringList m_candidateUrls;
+	int m_urlIndex = 0;
 
 private slots:
 	void process();

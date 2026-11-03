@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
-    Modified Copyright (C) 2024 Rohith Namboothiri
+    Modified Copyright (C) 2024-2026 Rohith Namboothiri
  
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -31,7 +31,10 @@
 #endif
 #include <QAudioOutput>
 #include <QQueue>
-
+#include <QVector>
+#include <array>
+#include <cstdint>
+#include "AudioEnhancer.h"
 
 #define AUDIO_OUT 1
 #define AUDIO_IN  0
@@ -40,9 +43,31 @@ class AudioEngine : public QObject
 {
     Q_OBJECT
 public:
-    //explicit AudioEngine(QObject *parent = nullptr);
     AudioEngine(QString in, QString out);
     ~AudioEngine();
+
+    // Global lock-free audio enhancement controls (apply immediately across all active Mode threads)
+    static void setGlobalNoiseMode(int mode);
+    static int globalNoiseMode();
+    static void setGlobalHdUpscale(bool enabled);
+    static bool globalHdUpscale();
+    static void setGlobalTxEnhance(bool enabled);
+    static bool globalTxEnhance();
+    static void setGlobalVoiceIsolation(bool enabled);
+    static bool globalVoiceIsolation();
+    static void setGlobalRxClean(bool enabled);
+    static bool globalRxClean();
+    static void setGlobalSpkPreampDb(float db);
+    static float globalSpkPreampDb();
+
+    // Saved user persisted config vs automatic external-mic bypass
+    static void loadSavedUserTxSettings(int nrMode, bool hdOn, bool txOn, bool viOn);
+    static int savedUserNoiseMode();
+    static bool savedUserHdUpscale();
+    static bool savedUserTxEnhance();
+    static void setExternalMicActive(bool externalActive);
+    static bool isExternalMicActive();
+    static void setStateChangeCallback(void (*cb)());
     QStringList discover_audio_devices(uint8_t d);
     void init();
     void start_capture();
@@ -50,23 +75,28 @@ public:
     void start_playback();
     void stop_playback();
     void write(int16_t *, size_t);
-    void set_output_buffer_size(uint32_t b) { m_out->setBufferSize(b); }
-    void set_input_buffer_size(uint32_t b) { if(m_in != nullptr) m_in->setBufferSize(b); }
-    void set_output_volume(qreal v){ m_out->setVolume(v); }
-    void set_input_volume(qreal v){ if(m_in != nullptr) m_in->setVolume(v); }
+    void set_output_buffer_size(uint32_t b);
+    void set_input_buffer_size(uint32_t b);
+    void set_output_volume(qreal v);
+    void set_input_volume(qreal v);
     void set_agc(bool agc) { m_agc = agc; }
+    void flush_capture_for_tx()
+    {
+        m_audioinq.clear();
+        m_tx16kCount = 0;
+        m_capPunchInSamples = 0;
+        m_capPunchInTotal = static_cast<size_t>(std::max(96, (std::max(8000, m_captureDeviceRate) * 12) / 1000));
+        m_txEnhancer.reset();
+    }
     bool frame_available() { return (m_audioinq.size() >= 320) ? true : false; }
     uint16_t read(int16_t *, int);
     uint16_t read(int16_t *);
     uint16_t level() { return m_maxlevel; }
-    bool shouldResumePlayback();
-    bool shouldRestartPlayback();
-    bool m_dataWritten;
+    bool m_dataWritten { false };
     void setOutputDevice(const QString &deviceName);
     void setInputDevice(const QString &deviceName);
     QString getFriendlyName(const QString& deviceIdentifier);
     QString mapFriendlyNameToDevice(const QString &friendlyName);
-    //QStringList devices = audioEngine->discover_audio_devices(1);
 
 signals:
     void audioDeviceListChanged();
@@ -76,63 +106,91 @@ private:
     QString m_outputdevice;
     QString m_inputdevice;
 #if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
-    QAudioOutput *m_out;
-    QAudioInput *m_in;
+    QAudioOutput *m_out { nullptr };
+    QAudioInput *m_in { nullptr };
 #else
-    QAudioSink *m_out;
-    QAudioSource *m_in;
+    QAudioSink *m_out { nullptr };
+    QAudioSource *m_in { nullptr };
 #endif
-    QIODevice *m_outdev;
-    QIODevice *m_indev;
+    QIODevice *m_outdev { nullptr };
+    QIODevice *m_indev { nullptr };
     QQueue<int16_t> m_audioinq;
-    uint16_t m_maxlevel;
-    bool m_agc;
-    float m_srm; // sample rate multiplier for macOS HACK
+    uint16_t m_maxlevel { 0 };
+    bool m_agc { true };
+    float m_srm { 1.0f };
 
-    // Audio IO rates
+    // Audio IO rates & formats
     int m_captureDeviceRate { 8000 };
+    int m_captureChannels { 1 };
+    QAudioFormat::SampleFormat m_captureSampleFormat { QAudioFormat::Int16 };
+
     int m_playbackDeviceRate { 8000 };
+    int m_playbackChannels { 1 };
+    QAudioFormat::SampleFormat m_playbackSampleFormat { QAudioFormat::Int16 };
 
-    // Capture resampling state: deviceRate -> 8000 Hz (mono)
+    uint32_t m_lastPlayRouteGen { 0 };
+    uint32_t m_lastCapRouteGen { 0 };
+    bool m_reinitializingSink { false };
+    int m_consecutiveWriteFailures { 0 };
+
+    // Capture resampling state: deviceRate -> 16000 Hz or 8000 Hz (mono)
     qint64 m_capStreamIndex { -1 };
-    double m_capNextOutPos { 0.0 }; // in input-sample index units
+    double m_capNextOutPos { 0.0 };
     float m_capPrevSample { 0.0f };
+    std::array<float, 4> m_capHist{};
+    std::array<float, 320> m_tx16kBuf{};
+    size_t m_tx16kCount { 0 };
 
-    // Playback resampling state: 8000 Hz -> deviceRate (mono)
+    // Playback resampling state: 16000 Hz (or 8000 Hz) -> deviceRate (mono)
     qint64 m_playStreamIndex { -1 };
-    double m_playNextOutPos { 0.0 }; // in input-sample index units (8 kHz domain)
+    double m_playNextOutPos { 0.0 };
     float m_playPrevSample { 0.0f };
+    std::array<float, 4> m_playHist{};
+    bool m_lastPlayHdMode { true };
 
-    // Simple capture low-pass (to reduce aliasing before downsampling)
+    // 4th-order Linkwitz-Riley (two cascaded 2nd-order Butterworth biquads) filter state
     struct Biquad {
         float b0 { 1.0f }, b1 { 0.0f }, b2 { 0.0f };
         float a1 { 0.0f }, a2 { 0.0f };
         float z1 { 0.0f }, z2 { 0.0f };
     };
+    Biquad m_capAntiAlias1;
+    Biquad m_capAntiAlias2;
+    Biquad m_capHighpass;
+    Biquad m_capHighpass2;
     Biquad m_capLowpass;
+    Biquad m_capLowpass2;
+    Biquad m_playLowpass;
+    Biquad m_playLowpass2;
+    size_t m_capPunchInSamples { 0 };
+    size_t m_capPunchInTotal { 1 };
+
+    AudioEnhancer m_txEnhancer { AudioEnhancer::RoleTx };
+    AudioEnhancer m_rxEnhancer { AudioEnhancer::RoleRx };
+    QVector<float> m_playOutFloat;
+    QVector<int16_t> m_playOutInt16;
 
     static Biquad makeLowpassBiquad(float fs, float fc, float Q);
+    static Biquad makeHighpassBiquad(float fs, float fc, float Q);
     static float biquadProcess(Biquad &bq, float x);
+    static float hermite4(float frac, float ym1, float y0, float y1, float y2);
+    void updatePlaybackReconstructionFilter(bool hdActive);
 
-    float m_audio_out_temp_buf[320];   //!< output of decoder
+    void initPlaybackSink();
+    void initCaptureSource();
+    bool matchesSelectedDevice(const QAudioDevice &dev, const QString &selected);
+
+    float m_audio_out_temp_buf[320];
     float *m_audio_out_temp_buf_p;
-
-    //float m_audio_out_float_buf[1120]; //!< output of upsampler - 1 frame of 160 samples upampled up to 7 times
-    //float *m_audio_out_float_buf_p;
 
     float m_aout_max_buf[200];
     float *m_aout_max_buf_p;
-    int m_aout_max_buf_idx;
+    int m_aout_max_buf_idx { 0 };
 
-    //short m_audio_out_buf[2*48000];    //!< final result - 1s of L+R S16LE samples
-    //short *m_audio_out_buf_p;
-    //int   m_audio_out_nb_samples;
-    //int   m_audio_out_buf_size;
-    //int   m_audio_out_idx;
-    //int   m_audio_out_idx2;
-
-    float m_aout_gain;
-    float m_volume;
+    float m_aout_gain { 1.0f };
+    float m_volume { 1.0f };
+    float m_inGain { 1.0f };
+    float m_preampGain { 1.0f };
 
 private slots:
     void input_data_received();

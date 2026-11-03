@@ -31,6 +31,11 @@ void imbe_vocoder::decode_4400(int16_t *snd, uint8_t *imbe)
 	Impl->decode_4400(snd, imbe);
 }
 
+void imbe_vocoder::reset_tx(void)
+{
+	Impl->reset_tx();
+}
+
 const IMBE_PARAM* imbe_vocoder::param(void)
 {
 	return Impl->param();

@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 2025 Rohith Namboothiri
+    Copyright (C) 2024-2026 Rohith Namboothiri
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -27,204 +27,518 @@ Page {
     title: qsTr("Settings")
     padding: 0
 
+    property var app: null
     required property var droidstarRef
     required property var appState
+    property Component headerActions: null
 
     Tokens { id: t }
 
-    // iOS keyboard/focus can skip onEditingFinished; debounce commits instead.
-    Timer {
-        id: commitTimer
-        interval: 350
-        repeat: false
-        property var fn: null
-        onTriggered: { if (fn) fn(); fn = null }
-    }
-    function scheduleCommit(f) {
-        commitTimer.fn = f
-        commitTimer.restart()
-    }
+    background: Rectangle { color: t.bg }
 
-    // Section expansion states (remember user preference)
-    property bool identityExpanded: true
-    property bool audioExpanded: false
-    property bool dstarExpanded: false
-    property bool profileExpanded: false
-    property bool dmrExpanded: false
-    property bool networkExpanded: false
-    property bool modemExpanded: false
-    property bool maintenanceExpanded: false
-    property bool ttsExpanded: false
-    
-    // Force Flickable to recalculate height when sections expand/collapse
-    function updateScrollHeight() {
-        if (flick) {
-            flick.contentHeight = flick.contentHeight + 0.01 // Force recalculation
-            flick.contentHeight = wrapperItem.height
+    // Usable width inside a CollapsibleSection (outer margins + content padding)
+    readonly property real formWidth: contentLayout.width - 32
+    readonly property int cols3: formWidth >= 520 ? 3 : (formWidth >= 300 ? 2 : 1)
+    readonly property int cols2: formWidth >= 300 ? 2 : 1
+    // Switch tiles need room for label + description + switch
+    readonly property int colsToggle: formWidth >= 480 ? 2 : 1
+
+    readonly property bool ttsAvailable: (typeof USE_FLITE !== "undefined" && USE_FLITE)
+
+    readonly property var transcriptionLangList: [
+        { code: "auto", label: qsTr("Auto-Detect") },
+        { code: "en",   label: qsTr("English") },
+        { code: "es",   label: qsTr("Spanish (Español)") },
+        { code: "de",   label: qsTr("German (Deutsch)") },
+        { code: "fr",   label: qsTr("French (Français)") },
+        { code: "ja",   label: qsTr("Japanese (日本語)") },
+        { code: "it",   label: qsTr("Italian (Italiano)") },
+        { code: "pt",   label: qsTr("Portuguese (Português)") },
+        { code: "ru",   label: qsTr("Russian (Русский)") },
+        { code: "zh",   label: qsTr("Chinese (中文)") },
+        { code: "hi",   label: qsTr("Hindi (हिन्दी)") },
+        { code: "ar",   label: qsTr("Arabic (العربية)") },
+        { code: "nl",   label: qsTr("Dutch (Nederlands)") },
+        { code: "pl",   label: qsTr("Polish (Polski)") },
+        { code: "ko",   label: qsTr("Korean (한국어)") },
+        { code: "tr",   label: qsTr("Turkish (Türkçe)") }
+    ]
+    readonly property var transcriptionLangLabels: (function() {
+        var out = []
+        for (var i = 0; i < transcriptionLangList.length; i++) out.push(transcriptionLangList[i].label)
+        return out
+    })()
+    function langLabelForCode(code) {
+        var c = (code || "auto").toLowerCase()
+        for (var i = 0; i < transcriptionLangList.length; i++) {
+            if (transcriptionLangList[i].code === c) return transcriptionLangList[i].label
         }
+        return transcriptionLangList[0].label
     }
 
     // Models (legacy parity)
-    readonly property var essidModel: (function(){
-        var ids = ["None"];
-        for (var i = 0; i < 100; i++) ids.push(i.toString().padStart(2, "0"));
-        return ids;
+    readonly property var essidModel: (function() {
+        var ids = ["None"]
+        for (var i = 0; i < 100; i++) ids.push(i.toString().padStart(2, "0"))
+        return ids
     })()
 
-    background: Rectangle { color: t.bg }
+    readonly property var modemFields: [
+        { label: qsTr("RX Freq"),         prop: "modemRxFreq",       setter: "set_modemRxFreq" },
+        { label: qsTr("TX Freq"),         prop: "modemTxFreq",       setter: "set_modemTxFreq" },
+        { label: qsTr("RX Offset"),       prop: "modemRxOffset",     setter: "set_modemRxOffset" },
+        { label: qsTr("TX Offset"),       prop: "modemTxOffset",     setter: "set_modemTxOffset" },
+        { label: qsTr("RX DC Offset"),    prop: "modemRxDCOffset",   setter: "set_modemRxDCOffset" },
+        { label: qsTr("TX DC Offset"),    prop: "modemTxDCOffset",   setter: "set_modemTxDCOffset" },
+        { label: qsTr("RX Level"),        prop: "modemRxLevel",      setter: "set_modemRxLevel" },
+        { label: qsTr("TX Level"),        prop: "modemTxLevel",      setter: "set_modemTxLevel" },
+        { label: qsTr("RF Level"),        prop: "modemRFLevel",      setter: "set_modemRFLevel" },
+        { label: qsTr("TX Delay"),        prop: "modemTxDelay",      setter: "set_modemTxDelay" },
+        { label: qsTr("CWID TX Level"),   prop: "modemCWIdTxLevel",  setter: "set_modemCWIdTxLevel" },
+        { label: qsTr("D-STAR TX Level"), prop: "modemDstarTxLevel", setter: "set_modemDstarTxLevel" },
+        { label: qsTr("DMR TX Level"),    prop: "modemDMRTxLevel",   setter: "set_modemDMRTxLevel" },
+        { label: qsTr("YSF TX Level"),    prop: "modemYSFTxLevel",   setter: "set_modemYSFTxLevel" },
+        { label: qsTr("P25 TX Level"),    prop: "modemP25TxLevel",   setter: "set_modemP25TxLevel" },
+        { label: qsTr("NXDN TX Level"),   prop: "modemNXDNTxLevel",  setter: "set_modemNXDNTxLevel" },
+        { label: qsTr("Baud"),            prop: "modemBaud",         setter: "set_modemBaud" }
+    ]
+
+    // Generic text setting: optimistic UI state on each keystroke, backend on commit.
+    function editState(prop, v) { if (page.appState) page.appState[prop] = v }
+    function commitState(prop, setter, v) {
+        if (!page.appState) return
+        page.appState[prop] = v
+        if (page.droidstarRef && typeof page.droidstarRef[setter] === "function") page.droidstarRef[setter](v)
+    }
 
     Flickable {
         id: flick
         anchors.fill: parent
-        anchors.margins: 12
         contentWidth: width
-        contentHeight: heightTracker.height
-        clip: true
-
-        Item {
-            id: heightTracker
-            width: 1
-            height: contentLayout.childrenRect.height + 40
-            
-            // Watch for changes in any section's expanded state to trigger recalculation
-            property real trigger: page.identityExpanded + page.audioExpanded + page.dstarExpanded + 
-                                  page.profileExpanded + page.dmrExpanded + page.networkExpanded + 
-                                  page.modemExpanded + page.maintenanceExpanded + page.ttsExpanded
-            onTriggerChanged: {
-                Qt.callLater(function() {
-                    heightTracker.height = contentLayout.childrenRect.height + 40
-                })
-            }
-            
-            // Timer to periodically check and update height (catches any missed updates)
-            Timer {
-                interval: 100
-                running: true
-                repeat: true
-                onTriggered: {
-                    var newHeight = contentLayout.childrenRect.height + 40
-                    if (Math.abs(heightTracker.height - newHeight) > 1) {
-                        heightTracker.height = newHeight
-                    }
-                }
-            }
-        }
+        contentHeight: contentLayout.implicitHeight + 40
+        boundsBehavior: Flickable.DragOverBounds
+        ScrollIndicator.vertical: ScrollIndicator {}
 
         ColumnLayout {
             id: contentLayout
-            width: parent.width
-            spacing: 14
+            x: Math.max(10, (flick.width - width) / 2)
+            y: 12
+            width: Math.min(flick.width - 20, t.maxContentWidth)
+            spacing: 12
 
             // ─────────────────────────────────────────────────────────
             // IDENTITY
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Identity")
-                expanded: page.identityExpanded
-                onExpandedChanged: page.identityExpanded = expanded
+                statusText: page.appState ? page.appState.callsign : ""
+                expanded: true
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: page.cols3
+                        columnSpacing: 10
+                        rowSpacing: 10
+
+                        FormField {
+                            Layout.columnSpan: page.cols3 === 2 ? 2 : 1
+                            label: qsTr("Callsign")
+                            value: page.appState ? page.appState.callsign : ""
+                            uppercase: true
+                            placeholderText: qsTr("e.g. W1AW")
+                            validator: RegularExpressionValidator { regularExpression: /[A-Za-z0-9\/]{0,10}/ }
+                            onEdited: function(v) { page.editState("callsign", v) }
+                            onCommitted: function(v) { page.commitState("callsign", "set_callsign", v) }
+                        }
+
+                        FormField {
+                            label: qsTr("DMR ID")
+                            value: page.appState ? page.appState.dmrid : ""
+                            placeholderText: qsTr("7 digits")
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            validator: RegularExpressionValidator { regularExpression: /[0-9]{0,8}/ }
+                            onEdited: function(v) { page.editState("dmrid", v) }
+                            onCommitted: function(v) { page.commitState("dmrid", "set_dmrid", v) }
+                        }
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
                             spacing: 4
-                            Label { text: qsTr("Callsign"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.callsign : ""
-                                font.capitalization: Font.AllUppercase
-                                placeholderText: qsTr("e.g. W1AW")
-                                onTextEdited: {
-                                    if (!page.appState) return
-                                    page.appState.callsign = text.toUpperCase()
-                                    scheduleCommit(function(){ page.droidstarRef.set_callsign(page.appState.callsign) })
-                                }
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.callsign = text.toUpperCase()
-                                    page.droidstarRef.set_callsign(page.appState.callsign)
-                                }
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.preferredWidth: 120
-                            spacing: 4
-                            Label { text: qsTr("DMR ID"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.dmrid : ""
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                placeholderText: qsTr("7 digits")
-                                onTextEdited: {
-                                    if (!page.appState) return
-                                    page.appState.dmrid = text
-                                    scheduleCommit(function(){ page.droidstarRef.set_dmrid(page.appState.dmrid) })
-                                }
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.dmrid = text
-                                    page.droidstarRef.set_dmrid(text)
-                                }
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.preferredWidth: 90
-                            spacing: 4
-                            Label { text: qsTr("ESSID"); font.pixelSize: 11; opacity: 0.6 }
-                            ComboBox {
-                                Layout.fillWidth: true
+                            Label { text: qsTr("ESSID"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SearchableComboSheet {
                                 model: page.essidModel
-                                currentIndex: page.appState ? Math.max(0, model.indexOf(page.appState.essid)) : 0
-                                onActivated: {
-                                    if (!page.appState) return
-                                    page.appState.essid = currentText
-                                    page.droidstarRef.set_essid(currentText)
-                                }
+                                sheetTitle: qsTr("Select ESSID")
+                                currentText: page.appState ? page.appState.essid : "None"
+                                onActivated: function(index, text) { page.commitState("essid", "set_essid", text) }
                             }
                         }
                     }
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: page.cols3
+                        columnSpacing: 10
+                        rowSpacing: 10
+
+                        FormField {
+                            label: qsTr("BM Password")
+                            value: page.appState ? page.appState.bmPass : ""
+                            password: true
+                            placeholderText: qsTr("Brandmeister hotspot password")
+                            onEdited: function(v) { page.editState("bmPass", v) }
+                            onCommitted: function(v) { page.commitState("bmPass", "set_bm_password", v) }
+                        }
+                        FormField {
+                            label: qsTr("TGIF Password")
+                            value: page.appState ? page.appState.tgifPass : ""
+                            password: true
+                            placeholderText: qsTr("TGIF hotspot password")
+                            onEdited: function(v) { page.editState("tgifPass", v) }
+                            onCommitted: function(v) { page.commitState("tgifPass", "set_tgif_password", v) }
+                        }
+                        FormField {
+                            Layout.columnSpan: page.cols3 === 2 ? 2 : 1
+                            label: qsTr("ASL Password")
+                            value: page.appState ? page.appState.aslPass : ""
+                            password: true
+                            placeholderText: qsTr("AllStarLink portal password (IAX wt)")
+                            onEdited: function(v) { page.editState("aslPass", v) }
+                            onCommitted: function(v) { page.commitState("aslPass", "set_asl_password", v) }
+                        }
+                    }
+                }
+            }
+
+            // ─────────────────────────────────────────────────────────
+            // LIVE TRANSCRIPTION (Apple Neural Engine streaming or local Whisper)
+            // ─────────────────────────────────────────────────────────
+            CollapsibleSection {
+                id: transcriptionSection
+                readonly property bool appleSupported: !!(page.appState && page.appState.transcriptionAppleSupported)
+                readonly property bool parakeetSupported: !!(page.appState && page.appState.transcriptionParakeetSupported)
+                readonly property string curEngine: page.appState ? (page.appState.transcriptionEngine || "apple") : "apple"
+                readonly property bool usingParakeet: parakeetSupported && (curEngine === "parakeet")
+                readonly property bool usingWhisper: (!appleSupported && !usingParakeet) || (curEngine === "whisper")
+                readonly property var modelSizes: ({ tiny: "~31 MB", base: "~57 MB", small: "~181 MB", turbo: "~547 MB" })
+                readonly property string parakeetDisabledReason: page.appState ? (page.appState.transcriptionParakeetDisabledReason || "") : ""
+                readonly property string smallDisabledReason: page.appState ? (page.appState.transcriptionSmallDisabledReason || "") : ""
+                readonly property string turboDisabledReason: page.appState ? (page.appState.transcriptionTurboDisabledReason || "") : ""
+                property string guardrailWarning: ""
+
+                function showGuardrailWarning(reason) {
+                    var msg = reason || qsTr("This model is disabled on your iPhone model to prevent memory crashes.")
+                    transcriptionSection.guardrailWarning = msg
+                    if (page.app) page.app.notify(msg, "", null, "warning")
+                }
+
+                readonly property string shortCollapsedBadge: {
+                    if (!(page.appState && page.appState.transcriptionEnabled)) return qsTr("Off")
+                    if (transcriptionSection.usingParakeet) return qsTr("Parakeet v3")
+                    if (transcriptionSection.usingWhisper) {
+                        var m = (page.appState.transcriptionModel || "base").toLowerCase()
+                        var tierName = m === "turbo" ? "Turbo"
+                                     : (m === "small" ? "Small"
+                                     : (m === "tiny" ? "Tiny" : "Base"))
+                        return qsTr("Whisper - %1").arg(tierName)
+                    }
+                    return qsTr("Apple Neural")
+                }
+
+                title: qsTr("Live Transcription")
+                statusText: transcriptionSection.shortCollapsedBadge
+                statusColor: (page.appState && page.appState.transcriptionEnabled) ? t.success : t.textMuted
+                expanded: false
+
+                content: ColumnLayout {
+                    spacing: 12
+
+                    ToggleRow {
+                        text: qsTr("Enable Live RX Transcription")
+                        description: qsTr("Transcribes incoming radio audio locally on-device with zero audio delay.")
+                        checked: !!(page.appState && page.appState.transcriptionEnabled)
+                        onToggled: function(on) {
+                            if (page.app) page.app.setTranscriptionEnabled(on)
+                        }
+                    }
+
+                    ToggleRow {
+                        text: qsTr("Save Transcripts to QSO Log")
+                        description: qsTr("Stores each finished over's transcript with its QSO entry. Applies to every engine and model.")
+                        checked: !!(page.appState && page.appState.transcriptionLogEnabled)
+                        onToggled: function(on) {
+                            if (page.app) page.app.setTranscriptionLogEnabled(on)
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        visible: transcriptionSection.appleSupported
+                        spacing: 4
+                        Label { text: qsTr("Recognition Engine"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                        SegmentedControl {
+                            options: transcriptionSection.parakeetSupported
+                                     ? [
+                                         { label: qsTr("Apple Neural"), value: "apple" },
+                                         {
+                                             label: qsTr("Parakeet v3"),
+                                             value: "parakeet",
+                                             disabled: transcriptionSection.parakeetDisabledReason !== "",
+                                             disabledReason: transcriptionSection.parakeetDisabledReason
+                                         },
+                                         { label: qsTr("Whisper AI"), value: "whisper" }
+                                       ]
+                                     : [
+                                         { label: qsTr("Apple Neural"), value: "apple" },
+                                         { label: qsTr("Whisper AI"), value: "whisper" }
+                                       ]
+                            currentValue: transcriptionSection.curEngine
+                            onSelected: function(value) {
+                                transcriptionSection.guardrailWarning = ""
+                                if (page.app) page.app.setTranscriptionEngine(value)
+                            }
+                            onDisabledSelected: function(value, reason) {
+                                transcriptionSection.showGuardrailWarning(reason)
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: transcriptionSection.usingParakeet
+                                  ? qsTr("NVIDIA Parakeet TDT 0.6B v3 (~640 MB INT8 transducer). Auto-detects 25 European languages (EN, ES, IT, DE, FR, PT, NL, PL, RU, UK, etc.) with frame-aligned NATO phonetic & Ham Q-code decoding.")
+                                  : (transcriptionSection.usingWhisper
+                                     ? qsTr("Local multilingual Whisper AI (99 languages + Auto-Detect with NATO phonetic & Ham Q-code decoding). Turbo (~547 MB) and Small (~181 MB) are most accurate on muffled DMR audio.")
+                                     : qsTr("Uses Apple's built-in iOS Speech Recognition (Whisper & Parakeet are disabled & unloaded). Supports English, Spanish, Italian, German, French, and 10+ languages."))
+                            font.pixelSize: t.fsCaption
+                            color: t.textMuted
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: (transcriptionSection.usingWhisper && page.formWidth >= 520) ? 2 : 1
+                        columnSpacing: 10
+                        rowSpacing: 10
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
                             spacing: 4
-                            Label { text: qsTr("BM Password"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                echoMode: TextInput.Password
-                                text: page.appState ? page.appState.bmPass : ""
-                                placeholderText: qsTr("Brandmeister")
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.bmPass = text
-                                    page.droidstarRef.set_bm_password(text)
+                            Label { text: qsTr("Spoken Language"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SearchableComboSheet {
+                                model: page.transcriptionLangLabels
+                                currentText: page.langLabelForCode(page.appState ? page.appState.transcriptionLanguage : "auto")
+                                sheetTitle: qsTr("Transcription Language")
+                                searchable: true
+                                onActivated: function(index) {
+                                    if (index >= 0 && index < page.transcriptionLangList.length && page.app) {
+                                        page.app.setTranscriptionLanguage(page.transcriptionLangList[index].code)
+                                    }
                                 }
                             }
                         }
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            visible: transcriptionSection.usingWhisper
                             spacing: 4
-                            Label { text: qsTr("TGIF Password"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
+                            Label { text: qsTr("Multilingual Whisper Model"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SegmentedControl {
+                                options: [
+                                    { label: qsTr("Tiny"), value: "tiny" },
+                                    { label: qsTr("Base"), value: "base" },
+                                    {
+                                        label: qsTr("Small"),
+                                        value: "small",
+                                        disabled: transcriptionSection.smallDisabledReason !== "",
+                                        disabledReason: transcriptionSection.smallDisabledReason
+                                    },
+                                    {
+                                        label: qsTr("Turbo"),
+                                        value: "turbo",
+                                        disabled: transcriptionSection.turboDisabledReason !== "",
+                                        disabledReason: transcriptionSection.turboDisabledReason
+                                    }
+                                ]
+                                currentValue: page.appState ? page.appState.transcriptionModel : "base"
+                                onSelected: function(value) {
+                                    transcriptionSection.guardrailWarning = ""
+                                    if (page.app) page.app.setTranscriptionModel(value)
+                                }
+                                onDisabledSelected: function(value, reason) {
+                                    transcriptionSection.showGuardrailWarning(reason)
+                                }
+                            }
+                            Label {
                                 Layout.fillWidth: true
-                                echoMode: TextInput.Password
-                                text: page.appState ? page.appState.tgifPass : ""
-                                placeholderText: qsTr("TGIF")
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.tgifPass = text
-                                    page.droidstarRef.set_tgif_password(text)
+                                Layout.minimumWidth: 0
+                                text: {
+                                    var tier = page.appState ? page.appState.transcriptionModel : "base"
+                                    var name = page.appState ? page.appState.transcriptionModelName : ""
+                                    return qsTr("Whisper - %1").arg(name || tier) + " • " + (transcriptionSection.modelSizes[tier] || "")
+                                }
+                                font.pixelSize: t.fsCaption
+                                color: t.textMuted
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: (page.formWidth >= 440 || !downloadModelBtn.visible) ? 2 : 1
+                        columnSpacing: 10
+                        rowSpacing: 8
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            text: qsTr("Status: %1").arg(page.appState ? page.appState.transcriptionStatus : qsTr("Off"))
+                            font.pixelSize: t.fsSmall
+                            color: (page.appState && page.appState.transcriptionModelReady) ? t.success : t.textMuted
+                            wrapMode: Text.WordWrap
+                        }
+
+                        AppButton {
+                            id: downloadModelBtn
+                            visible: (transcriptionSection.usingWhisper || transcriptionSection.usingParakeet) &&
+                                     !(page.appState && page.appState.transcriptionModelReady) &&
+                                     !(page.appState && page.appState.transcriptionDownloading)
+                            Layout.fillWidth: page.formWidth < 440
+                            text: qsTr("Download Model")
+                            glyph: "\uf019"
+                            tone: "primary"
+                            onClicked: if (page.app) page.app.downloadTranscriptionModel()
+                        }
+                    }
+
+                    // Dynamic device guardrail warning banner (shown when a disabled model is clicked)
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: transcriptionSection.guardrailWarning !== ""
+                        implicitHeight: guardrailRow.implicitHeight + 16
+                        radius: 10
+                        clip: true
+                        color: t.tint(t.warning, 0.14)
+                        border.color: t.tint(t.warning, 0.55)
+                        border.width: 1
+
+                        RowLayout {
+                            id: guardrailRow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 8
+                            spacing: 8
+
+                            Label {
+                                text: "\uf071"
+                                font.family: "FontAwesome"
+                                font.pixelSize: 13
+                                color: t.warning
+                                Layout.alignment: Qt.AlignTop
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                text: transcriptionSection.guardrailWarning
+                                font.pixelSize: t.fsCaption
+                                color: t.text
+                                wrapMode: Text.WordWrap
+                            }
+
+                            ToolButton {
+                                implicitWidth: 22
+                                implicitHeight: 22
+                                padding: 0
+                                text: "\uf00d"
+                                font.family: "FontAwesome"
+                                font.pixelSize: 10
+                                Accessible.name: qsTr("Dismiss warning")
+                                onClicked: transcriptionSection.guardrailWarning = ""
+                            }
+                        }
+                    }
+
+                    // Active parallel / queued model downloads list (persists across engine switches & tab changes)
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        visible: !!(page.appState && page.appState.transcriptionActiveDownloads &&
+                                    page.appState.transcriptionActiveDownloads.length > 0)
+
+                        Repeater {
+                            model: page.appState ? page.appState.transcriptionActiveDownloads : []
+                            delegate: Rectangle {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                implicitHeight: dlItemCol.implicitHeight + 14
+                                radius: 10
+                                clip: true
+                                color: t.surface3
+                                border.color: t.stroke
+                                border.width: 1
+
+                                ColumnLayout {
+                                    id: dlItemCol
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 7
+                                    spacing: 5
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            text: qsTr("Downloading %1 (%2%)…")
+                                                  .arg(modelData.label || modelData.key || "")
+                                                  .arg(modelData.percent !== undefined ? modelData.percent : 0)
+                                            font.pixelSize: t.fsCaption
+                                            font.bold: true
+                                            color: t.text
+                                            elide: Text.ElideRight
+                                        }
+
+                                        ToolButton {
+                                            implicitWidth: 24
+                                            implicitHeight: 24
+                                            padding: 0
+                                            text: "\uf00d"
+                                            font.family: "FontAwesome"
+                                            font.pixelSize: 11
+                                            Accessible.name: qsTr("Cancel download")
+                                            onClicked: {
+                                                if (page.app && modelData.key) {
+                                                    page.app.cancelTranscriptionDownload(modelData.key)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        height: 5
+                                        radius: 2.5
+                                        color: t.surface2
+
+                                        Rectangle {
+                                            width: parent.width * Math.max(0.03, Math.min(1.0, modelData.progress || 0))
+                                            height: parent.height
+                                            radius: 2.5
+                                            color: t.accent
+                                            Behavior on width { NumberAnimation { duration: t.durFast } }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -233,143 +547,220 @@ Page {
             }
 
             // ─────────────────────────────────────────────────────────
-            // AUDIO
+            // AUDIO & DEVICES
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
-                title: qsTr("Audio Devices")
-                expanded: page.audioExpanded
-                onExpandedChanged: page.audioExpanded = expanded
+                title: qsTr("Audio & Devices")
+                expanded: false
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: page.cols2
+                        columnSpacing: 10
+                        rowSpacing: 10
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
                             spacing: 4
-                            Label { text: qsTr("Playback"); font.pixelSize: 11; opacity: 0.6 }
-                            ComboBox {
-                                id: playbackCombo
-                                Layout.fillWidth: true
-                                model: page.droidstarRef.get_playbacks()
-                                onActivated: {
-                                    page.droidstarRef.setPlaybackDevice(currentText)
-                                    page.droidstarRef.set_playback(currentText)
+                            Label { text: qsTr("Playback"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SearchableComboSheet {
+                                model: page.appState ? page.appState.playbacksModel : []
+                                currentText: page.appState ? page.appState.playback : ""
+                                sheetTitle: qsTr("Playback device")
+                                onActivated: function(index, text) {
+                                    page.appState.playback = text
+                                    page.droidstarRef.setPlaybackDevice(text)
+                                    page.droidstarRef.set_playback(text)
                                 }
                             }
                         }
 
                         ColumnLayout {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
                             spacing: 4
-                            Label { text: qsTr("Capture"); font.pixelSize: 11; opacity: 0.6 }
-                            ComboBox {
-                                id: captureCombo
-                                Layout.fillWidth: true
-                                model: page.droidstarRef.get_captures()
-                                onActivated: {
-                                    page.droidstarRef.setCaptureDevice(currentText)
-                                    page.droidstarRef.set_capture(currentText)
+                            Label { text: qsTr("Capture"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SearchableComboSheet {
+                                model: page.appState ? page.appState.capturesModel : []
+                                currentText: page.appState ? page.appState.capture : ""
+                                sheetTitle: qsTr("Capture device")
+                                onActivated: function(index, text) {
+                                    page.appState.capture = text
+                                    page.droidstarRef.setCaptureDevice(text)
+                                    page.droidstarRef.set_capture(text)
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            spacing: 4
+                            Label { text: qsTr("Vocoder"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SearchableComboSheet {
+                                model: page.appState ? page.appState.vocodersModel : []
+                                currentText: page.appState ? page.appState.vocoder : ""
+                                sheetTitle: qsTr("Vocoder")
+                                enabled: !(page.appState && (page.appState.connected || page.appState.connecting))
+                                onActivated: function(index, text) {
+                                    page.appState.vocoder = text
+                                    page.droidstarRef.set_vocoder(text)
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            spacing: 4
+                            Label { text: qsTr("Modem"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SearchableComboSheet {
+                                model: page.appState ? page.appState.modemsModel : []
+                                currentText: page.appState ? page.appState.modem : ""
+                                sheetTitle: qsTr("Modem")
+                                enabled: !(page.appState && (page.appState.connected || page.appState.connecting))
+                                onActivated: function(index, text) {
+                                    page.appState.modem = text
+                                    page.droidstarRef.set_modem(text)
                                 }
                             }
                         }
                     }
 
-                    RowLayout {
+                    Label {
                         Layout.fillWidth: true
-                        spacing: 10
+                        visible: !!(page.appState && (page.appState.connected || page.appState.connecting))
+                        text: qsTr("Vocoder and modem are applied when connecting. Disconnect to change them.")
+                        font.pixelSize: t.fsCaption
+                        color: t.textMuted
+                        wrapMode: Text.WordWrap
+                    }
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("Vocoder"); font.pixelSize: 11; opacity: 0.6 }
-                            ComboBox {
-                                id: vocoderCombo
-                                Layout.fillWidth: true
-                                model: page.droidstarRef.get_vocoders()
-                                onActivated: page.droidstarRef.set_vocoder(currentText)
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("Modem"); font.pixelSize: 11; opacity: 0.6 }
-                            ComboBox {
-                                id: modemCombo
-                                Layout.fillWidth: true
-                                model: page.droidstarRef.get_modems()
-                                onActivated: page.droidstarRef.set_modem(currentText)
-                            }
+                    AppButton {
+                        Layout.fillWidth: true
+                        text: qsTr("Rescan devices")
+                        glyph: "\uf021"
+                        onClicked: {
+                            if (!page.app) return
+                            page.app.refreshAudioDevices()
+                            page.app.refreshSerialDevices()
+                            page.app.notify(qsTr("Device list refreshed"), "", null, "success")
                         }
                     }
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 12
+                        columns: page.colsToggle
+                        columnSpacing: 10
+                        rowSpacing: 10
 
-                        Rectangle {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            height: 40
-                            radius: 10
-                            color: (page.appState && page.appState.mmdvmDirect) ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                            border.color: (page.appState && page.appState.mmdvmDirect) ? t.accent : t.stroke
-                            border.width: 1
-
+                            Layout.columnSpan: page.colsToggle
+                            spacing: 4
                             RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                Label { text: qsTr("MMDVM Direct"); Layout.fillWidth: true }
-                                Switch {
-                                    checked: page.appState ? page.appState.mmdvmDirect : false
-                                    onToggled: {
-                                        if (!page.appState) return
-                                        page.appState.mmdvmDirect = checked
-                                        page.droidstarRef.set_mmdvm_direct(checked)
-                                    }
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Speaker Clean Pre-Amp (Post-Processing Gain)")
+                                    font.pixelSize: t.fsCaption
+                                    color: t.textMuted
                                 }
+                                Label {
+                                    text: (Math.round(settingsPreampSlider.value) > 0 ? "+" : "") + Math.round(settingsPreampSlider.value) + " dB"
+                                    font.pixelSize: t.fsCaption
+                                    font.bold: true
+                                    color: (settingsPreampSlider.value > 0) ? t.accent : t.textMuted
+                                }
+                            }
+                            Slider {
+                                id: settingsPreampSlider
+                                Layout.fillWidth: true
+                                from: 0
+                                to: 24
+                                stepSize: 1
+                                value: page.appState ? page.appState.spkPreampDb : 6
+                                onMoved: if (page.app) page.app.setSpkPreampDb(value)
+                                onValueChanged: if (pressed && page.app) page.app.setSpkPreampDb(value)
                             }
                         }
 
-                        Rectangle {
+                        ToggleRow {
+                            Layout.columnSpan: page.colsToggle
+                            text: qsTr("RX Clarity & Light Noise Reduction")
+                            description: qsTr("Applies zero latency dynamic de-hissing, soft inter-word noise reduction, and gentle vocal clarity to incoming received audio")
+                            checked: !!(page.appState && page.appState.rxClean)
+                            onToggled: function(on) { if (page.app) page.app.setRxClean(on) }
+                        }
+
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            height: 40
-                            radius: 10
-                            color: (page.appState && page.appState.debug) ? Qt.rgba(t.warning.r, t.warning.g, t.warning.b, 0.2) : t.surface2
-                            border.color: (page.appState && page.appState.debug) ? t.warning : t.stroke
-                            border.width: 1
+                            Layout.columnSpan: page.colsToggle
+                            spacing: 4
+                            Label { text: qsTr("TX Mic Noise Reduction"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                            SegmentedControl {
+                                options: [
+                                    { label: qsTr("Off"), value: 0 },
+                                    { label: qsTr("Natural Gate"), value: 1 },
+                                    { label: qsTr("Neural AI"), value: 2 }
+                                ]
+                                currentValue: page.appState ? page.appState.noiseReductionMode : 2
+                                onSelected: function(value) { if (page.app) page.app.setNoiseReductionMode(value) }
+                            }
+                        }
 
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                Label { text: qsTr("Debug"); Layout.fillWidth: true }
-                                Switch {
-                                    checked: page.appState ? page.appState.debug : false
-                                    onToggled: {
-                                        if (!page.appState) return
-                                        page.appState.debug = checked
-                                        page.droidstarRef.set_debug(checked)
-                                    }
-                                }
+                        ToggleRow {
+                            text: qsTr("TX HD Voice Clarity")
+                            description: qsTr("Shapes outgoing microphone vocal presence and removes muddiness")
+                            checked: !!(page.appState && page.appState.hdUpscale)
+                            onToggled: function(on) { if (page.app) page.app.setHdUpscale(on) }
+                        }
+                        ToggleRow {
+                            text: qsTr("TX Mic Leveler & Gate")
+                            description: qsTr("Gates background noise between words and keeps your transmit voice level steady")
+                            checked: !!(page.appState && page.appState.txEnhance)
+                            onToggled: function(on) { if (page.app) page.app.setTxEnhance(on) }
+                        }
+                        ToggleRow {
+                            text: qsTr("MMDVM Direct")
+                            description: qsTr("M17 only")
+                            checked: !!(page.appState && page.appState.mmdvmDirect)
+                            onToggled: function(on) {
+                                page.appState.mmdvmDirect = on
+                                page.droidstarRef.set_mmdvm_direct(on)
+                            }
+                        }
+                        ToggleRow {
+                            text: qsTr("Debug")
+                            description: qsTr("Verbose protocol log")
+                            activeColor: t.warning
+                            checked: !!(page.appState && page.appState.debug)
+                            onToggled: function(on) {
+                                page.appState.debug = on
+                                page.droidstarRef.set_debug(on)
                             }
                         }
                     }
 
-                    // Status fields
-                    Label { 
-                        text: page.appState && page.appState.ambestatus ? page.appState.ambestatus : ""; 
-                        opacity: 0.7; 
-                        wrapMode: Text.WordWrap; 
-                        visible: !!(page.appState && page.appState.ambestatus && page.appState.ambestatus !== "") 
+                    Label {
+                        Layout.fillWidth: true
+                        text: page.appState ? page.appState.ambestatus : ""
+                        color: t.textMuted
+                        font.pixelSize: t.fsSmall
+                        wrapMode: Text.WordWrap
+                        visible: text !== ""
                     }
-                    Label { 
-                        text: page.appState && page.appState.mmdvmstatus ? page.appState.mmdvmstatus : ""; 
-                        opacity: 0.7; 
-                        wrapMode: Text.WordWrap; 
-                        visible: !!(page.appState && page.appState.mmdvmstatus && page.appState.mmdvmstatus !== "") 
+                    Label {
+                        Layout.fillWidth: true
+                        text: page.appState ? page.appState.mmdvmstatus : ""
+                        color: t.textMuted
+                        font.pixelSize: t.fsSmall
+                        wrapMode: Text.WordWrap
+                        visible: text !== ""
                     }
                 }
             }
@@ -379,121 +770,43 @@ Page {
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("D-STAR / Routing")
-                expanded: page.dstarExpanded
-                onExpandedChanged: page.dstarExpanded = expanded
+                expanded: false
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: page.cols2
+                        columnSpacing: 10
+                        rowSpacing: 10
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("MYCALL"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                id: mycallField
-                                Layout.fillWidth: true
-                                text: ""
-                                font.capitalization: Font.AllUppercase
-                                Component.onCompleted: { if (page.appState) text = page.appState.mycall }
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.mycall = text.toUpperCase()
-                                    page.droidstarRef.set_mycall(page.appState.mycall)
-                                }
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("URCALL"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                id: urcallField
-                                Layout.fillWidth: true
-                                text: ""
-                                font.capitalization: Font.AllUppercase
-                                Component.onCompleted: { if (page.appState) text = page.appState.urcall }
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.urcall = text.toUpperCase()
-                                    page.droidstarRef.set_urcall(page.appState.urcall)
-                                }
+                        Repeater {
+                            model: [
+                                { label: "MYCALL", prop: "mycall", setter: "set_mycall" },
+                                { label: "URCALL", prop: "urcall", setter: "set_urcall" },
+                                { label: "RPTR1",  prop: "rptr1",  setter: "set_rptr1" },
+                                { label: "RPTR2",  prop: "rptr2",  setter: "set_rptr2" }
+                            ]
+                            delegate: FormField {
+                                required property var modelData
+                                label: modelData.label
+                                value: page.appState ? page.appState[modelData.prop] : ""
+                                uppercase: true
+                                maximumLength: 8
+                                onEdited: function(v) { page.editState(modelData.prop, v) }
+                                onCommitted: function(v) { page.commitState(modelData.prop, modelData.setter, v) }
                             }
                         }
                     }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("RPTR1"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                id: rptr1Field
-                                Layout.fillWidth: true
-                                text: ""
-                                font.capitalization: Font.AllUppercase
-                                Component.onCompleted: { if (page.appState) text = page.appState.rptr1 }
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.rptr1 = text.toUpperCase()
-                                    page.droidstarRef.set_rptr1(page.appState.rptr1)
-                                }
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("RPTR2"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                id: rptr2Field
-                                Layout.fillWidth: true
-                                text: ""
-                                font.capitalization: Font.AllUppercase
-                                Component.onCompleted: { if (page.appState) text = page.appState.rptr2 }
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.rptr2 = text.toUpperCase()
-                                    page.droidstarRef.set_rptr2(page.appState.rptr2)
-                                }
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Label { text: qsTr("User Text"); font.pixelSize: 11; opacity: 0.6 }
-                        TextField {
-                            id: usrtxtField
-                            Layout.fillWidth: true
-                            text: ""
-                            Component.onCompleted: { if (page.appState) text = page.appState.usrtxt }
-                            onEditingFinished: {
-                                if (!page.appState) return
-                                page.appState.usrtxt = text
-                                page.droidstarRef.set_usrtxt(text)
-                            }
-                        }
-                    }
-
-                    // Legacy parity: keep fields updated from backend signals.
-                    // Use explicit assignment so edits don't break live updates.
-                    Connections {
-                        target: page.appState
-                        enabled: !!page.appState
-                        function onMycallChanged() { if (!mycallField.activeFocus) mycallField.text = page.appState.mycall }
-                        function onUrcallChanged() { if (!urcallField.activeFocus) urcallField.text = page.appState.urcall }
-                        function onRptr1Changed() { if (!rptr1Field.activeFocus) rptr1Field.text = page.appState.rptr1 }
-                        function onRptr2Changed() { if (!rptr2Field.activeFocus) rptr2Field.text = page.appState.rptr2 }
-                        function onUsrtxtChanged() { if (!usrtxtField.activeFocus) usrtxtField.text = page.appState.usrtxt }
+                    FormField {
+                        label: qsTr("User Text")
+                        value: page.appState ? page.appState.usrtxt : ""
+                        maximumLength: 20
+                        placeholderText: qsTr("Up to 20 characters")
+                        onEdited: function(v) { page.editState("usrtxt", v) }
+                        onCommitted: function(v) { page.commitState("usrtxt", "set_usrtxt", v) }
                     }
                 }
             }
@@ -503,127 +816,68 @@ Page {
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Profile / Location")
-                expanded: page.profileExpanded
-                onExpandedChanged: page.profileExpanded = expanded
+                expanded: false
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: page.cols2
+                        columnSpacing: 10
+                        rowSpacing: 10
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("Latitude"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.latitude : ""
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                placeholderText: qsTr("e.g. 40.7128")
-                                onEditingFinished: {
-                                    page.appState.latitude = text
-                                    page.droidstarRef.set_latitude(text)
-                                }
-                            }
+                        FormField {
+                            label: qsTr("Latitude")
+                            value: page.appState ? page.appState.latitude : ""
+                            placeholderText: qsTr("e.g. 40.7128")
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                            validator: RegularExpressionValidator { regularExpression: /-?[0-9]{0,2}(\.[0-9]{0,6})?/ }
+                            onEdited: function(v) { page.editState("latitude", v) }
+                            onCommitted: function(v) { page.commitState("latitude", "set_latitude", v) }
                         }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("Longitude"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.longitude : ""
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                placeholderText: qsTr("e.g. -74.0060")
-                                onEditingFinished: {
-                                    page.appState.longitude = text
-                                    page.droidstarRef.set_longitude(text)
-                                }
-                            }
+                        FormField {
+                            label: qsTr("Longitude")
+                            value: page.appState ? page.appState.longitude : ""
+                            placeholderText: qsTr("e.g. -74.0060")
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                            validator: RegularExpressionValidator { regularExpression: /-?[0-9]{0,3}(\.[0-9]{0,6})?/ }
+                            onEdited: function(v) { page.editState("longitude", v) }
+                            onCommitted: function(v) { page.commitState("longitude", "set_longitude", v) }
                         }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Label { text: qsTr("Location"); font.pixelSize: 11; opacity: 0.6 }
-                        TextField {
-                            Layout.fillWidth: true
-                            text: page.appState ? page.appState.location : ""
+                        FormField {
+                            label: qsTr("Location")
+                            value: page.appState ? page.appState.location : ""
                             placeholderText: qsTr("City, State/Country")
-                            onEditingFinished: {
-                                page.appState.location = text
-                                page.droidstarRef.set_location(text)
-                            }
+                            onEdited: function(v) { page.editState("location", v) }
+                            onCommitted: function(v) { page.commitState("location", "set_location", v) }
                         }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Label { text: qsTr("Description"); font.pixelSize: 11; opacity: 0.6 }
-                        TextField {
-                            Layout.fillWidth: true
-                            text: page.appState ? page.appState.description : ""
-                            onEditingFinished: {
-                                if (!page.appState) return
-                                page.appState.description = text
-                                page.droidstarRef.set_description(text)
-                            }
+                        FormField {
+                            label: qsTr("Description")
+                            value: page.appState ? page.appState.description : ""
+                            onEdited: function(v) { page.editState("description", v) }
+                            onCommitted: function(v) { page.commitState("description", "set_description", v) }
                         }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Label { text: qsTr("URL"); font.pixelSize: 11; opacity: 0.6 }
-                        TextField {
-                            Layout.fillWidth: true
-                            text: page.appState ? page.appState.url : ""
-                            inputMethodHints: Qt.ImhUrlCharactersOnly
-                            placeholderText: qsTr("https://...")
-                            onEditingFinished: {
-                                page.appState.url = text
-                                page.droidstarRef.set_url(text)
-                            }
+                        FormField {
+                            Layout.columnSpan: page.cols2
+                            label: qsTr("URL")
+                            value: page.appState ? page.appState.url : ""
+                            placeholderText: qsTr("https://…")
+                            inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+                            onEdited: function(v) { page.editState("url", v) }
+                            onCommitted: function(v) { page.commitState("url", "set_url", v) }
                         }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("SWID"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.swid : ""
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.swid = text
-                                    page.droidstarRef.set_swid(text)
-                                }
-                            }
+                        FormField {
+                            label: qsTr("Software ID")
+                            value: page.appState ? page.appState.swid : ""
+                            onEdited: function(v) { page.editState("swid", v) }
+                            onCommitted: function(v) { page.commitState("swid", "set_swid", v) }
                         }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("PKGID"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.pkgid : ""
-                                onEditingFinished: {
-                                    if (!page.appState) return
-                                    page.appState.pkgid = text
-                                    page.droidstarRef.set_pkgid(text)
-                                }
-                            }
+                        FormField {
+                            label: qsTr("Package ID")
+                            value: page.appState ? page.appState.pkgid : ""
+                            onEdited: function(v) { page.editState("pkgid", v) }
+                            onCommitted: function(v) { page.commitState("pkgid", "set_pkgid", v) }
                         }
                     }
                 }
@@ -634,89 +888,60 @@ Page {
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("DMR / TX Options")
-                expanded: page.dmrExpanded
-                onExpandedChanged: page.dmrExpanded = expanded
+                expanded: false
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-                            Label { text: qsTr("DMR Options"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.dmrOptions : ""
-                                onEditingFinished: {
-                                    page.appState.dmrOptions = text
-                                    page.droidstarRef.set_dmr_options(text)
-                                }
+                    ToggleRow {
+                        text: qsTr("BrandMeister ODTP (Instant TG Switch)")
+                        description: qsTr("Uses Open DMR Terminal Protocol (UDP 54006) on BrandMeister masters to switch and scan talkgroups instantly without keying TX")
+                        checked: !!(page.appState && page.appState.bmOdtp)
+                        onToggled: function(on) {
+                            page.appState.bmOdtp = on
+                            if (page.droidstarRef && typeof page.droidstarRef.set_bm_odtp === "function") {
+                                page.droidstarRef.set_bm_odtp(on)
                             }
                         }
+                    }
 
-                        ColumnLayout {
-                            Layout.preferredWidth: 120
-                            spacing: 4
-                            Label { text: qsTr("TX Timeout (s)"); font.pixelSize: 11; opacity: 0.6 }
-                            TextField {
-                                Layout.fillWidth: true
-                                text: page.appState ? page.appState.txTimeout : ""
-                                inputMethodHints: Qt.ImhDigitsOnly
-                                onEditingFinished: {
-                                    page.appState.txTimeout = text
-                                    page.droidstarRef.set_txtimeout(text)
-                                }
-                            }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: t.stroke }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: page.cols2
+                        columnSpacing: 10
+                        rowSpacing: 10
+
+                        FormField {
+                            label: qsTr("DMR Options")
+                            value: page.appState ? page.appState.dmrOptions : ""
+                            placeholderText: qsTr("Network options string")
+                            inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                            onEdited: function(v) { page.editState("dmrOptions", v) }
+                            onCommitted: function(v) { page.commitState("dmrOptions", "set_dmr_options", v) }
+                        }
+                        FormField {
+                            label: qsTr("TX Time-out (seconds, 0 = off)")
+                            value: page.appState ? page.appState.txTimeout : ""
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            validator: RegularExpressionValidator { regularExpression: /[0-9]{0,4}/ }
+                            onEdited: function(v) { page.editState("txTimeout", v) }
+                            onCommitted: function(v) { page.commitState("txTimeout", "set_txtimeout", v === "" ? "0" : v) }
                         }
                     }
 
                     ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 6
-                        Label { text: qsTr("M17 / YSF Rate"); font.pixelSize: 11; opacity: 0.6 }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-                            ButtonGroup { id: rateGroup }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                height: 40
-                                radius: 10
-                                color: voiceFullRadio.checked ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                                border.color: voiceFullRadio.checked ? t.accent : t.stroke
-                                border.width: 1
-
-                                RadioButton {
-                                    id: voiceFullRadio
-                                    anchors.centerIn: parent
-                                    text: qsTr("Voice Full")
-                                    checked: true
-                                    ButtonGroup.group: rateGroup
-                                    onClicked: page.droidstarRef.m17_rate_changed(true)
-                                }
-                            }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                height: 40
-                                radius: 10
-                                color: voiceDataRadio.checked ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                                border.color: voiceDataRadio.checked ? t.accent : t.stroke
-                                border.width: 1
-
-                                RadioButton {
-                                    id: voiceDataRadio
-                                    anchors.centerIn: parent
-                                    text: qsTr("Voice/Data")
-                                    ButtonGroup.group: rateGroup
-                                    onClicked: page.droidstarRef.m17_rate_changed(false)
-                                }
-                            }
+                        spacing: 4
+                        Label { text: qsTr("M17 / YSF Rate"); font.pixelSize: t.fsCaption; color: t.textMuted }
+                        SegmentedControl {
+                            options: [
+                                { label: qsTr("Voice Full"), value: true },
+                                { label: qsTr("Voice + Data"), value: false }
+                            ]
+                            currentValue: page.appState ? page.appState.m17VoiceFull : true
+                            onSelected: function(value) { if (page.app) page.app.setM17VoiceFull(value) }
                         }
                     }
                 }
@@ -726,89 +951,45 @@ Page {
             // NETWORK
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
-                title: qsTr("Network Options")
-                expanded: page.networkExpanded
-                onExpandedChanged: page.networkExpanded = expanded
+                title: qsTr("Network & TX Behaviour")
+                expanded: false
 
-                content: ColumnLayout {
-                    spacing: 12
+                content: GridLayout {
+                    columns: page.colsToggle
+                    columnSpacing: 10
+                    rowSpacing: 10
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            height: 44
-                            radius: 10
-                            color: (page.appState && page.appState.ipv6) ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                            border.color: (page.appState && page.appState.ipv6) ? t.accent : t.stroke
-                            border.width: 1
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                Label { text: qsTr("IPv6"); Layout.fillWidth: true }
-                                Switch {
-                                    checked: page.appState ? page.appState.ipv6 : false
-                                    onToggled: {
-                                        if (!page.appState) return
-                                        page.appState.ipv6 = checked
-                                        page.droidstarRef.set_ipv6(checked)
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            height: 44
-                            radius: 10
-                            color: (page.appState && page.appState.xrf2ref) ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                            border.color: (page.appState && page.appState.xrf2ref) ? t.accent : t.stroke
-                            border.width: 1
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                Label { text: qsTr("XRF→REF"); Layout.fillWidth: true }
-                                Switch {
-                                    checked: page.appState ? page.appState.xrf2ref : false
-                                    onToggled: {
-                                        if (!page.appState) return
-                                        page.appState.xrf2ref = checked
-                                        page.droidstarRef.set_xrf2ref(checked)
-                                    }
-                                }
-                            }
+                    ToggleRow {
+                        text: qsTr("IPv6")
+                        description: qsTr("Prefer IPv6 hosts when available")
+                        checked: !!(page.appState && page.appState.ipv6)
+                        onToggled: function(on) {
+                            page.appState.ipv6 = on
+                            page.droidstarRef.set_ipv6(on)
                         }
                     }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 44
-                        radius: 10
-                        color: (page.appState && page.appState.toggleTx) ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                        border.color: (page.appState && page.appState.toggleTx) ? t.accent : t.stroke
-                        border.width: 1
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-                                Label { text: qsTr("Toggle TX Mode") }
-                                Label { text: qsTr("Tap to toggle instead of hold-to-talk"); font.pixelSize: 10; opacity: 0.5 }
+                    ToggleRow {
+                        text: qsTr("XRF → REF")
+                        description: qsTr("Use REF protocol for XRF reflectors")
+                        checked: !!(page.appState && page.appState.xrf2ref)
+                        onToggled: function(on) {
+                            page.appState.xrf2ref = on
+                            page.droidstarRef.set_xrf2ref(on)
+                        }
+                    }
+                    ToggleRow {
+                        Layout.columnSpan: page.colsToggle
+                        text: qsTr("Toggle TX Mode")
+                        description: qsTr("Tap once to start and again to stop, instead of hold-to-talk")
+                        checked: !!(page.appState && page.appState.toggleTx)
+                        onToggled: function(on) {
+                            // Don't leave TX keyed when switching press semantics.
+                            if (page.appState.txActive && page.app) {
+                                if (page.appState.toggleTx) page.app.txSet(false)
+                                else page.app.txRelease()
                             }
-                            Switch {
-                                checked: page.appState ? page.appState.toggleTx : false
-                                onToggled: {
-                                    if (!page.appState) return
-                                    page.appState.toggleTx = checked
-                                    page.droidstarRef.set_toggletx(checked)
-                                }
-                            }
+                            page.appState.toggleTx = on
+                            page.droidstarRef.set_toggletx(on)
                         }
                     }
                 }
@@ -819,68 +1000,23 @@ Page {
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Modem Tuning (Advanced)")
-                expanded: page.modemExpanded
-                onExpandedChanged: page.modemExpanded = expanded
+                expanded: false
 
-                content: ColumnLayout {
-                    spacing: 10
+                content: GridLayout {
+                    columns: page.cols3
+                    columnSpacing: 10
+                    rowSpacing: 10
 
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        columnSpacing: 10
-                        rowSpacing: 8
-
-                        Label { text: qsTr("RX Freq"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemRxFreq : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemRxFreq=text; page.droidstarRef.set_modemRxFreq(text) } }
-
-                        Label { text: qsTr("TX Freq"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemTxFreq : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemTxFreq=text; page.droidstarRef.set_modemTxFreq(text) } }
-
-                        Label { text: qsTr("RX Offset"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemRxOffset : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemRxOffset=text; page.droidstarRef.set_modemRxOffset(text) } }
-
-                        Label { text: qsTr("TX Offset"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemTxOffset : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemTxOffset=text; page.droidstarRef.set_modemTxOffset(text) } }
-
-                        Label { text: qsTr("RX DC Offset"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemRxDCOffset : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemRxDCOffset=text; page.droidstarRef.set_modemRxDCOffset(text) } }
-
-                        Label { text: qsTr("TX DC Offset"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemTxDCOffset : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemTxDCOffset=text; page.droidstarRef.set_modemTxDCOffset(text) } }
-
-                        Label { text: qsTr("RX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemRxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemRxLevel=text; page.droidstarRef.set_modemRxLevel(text) } }
-
-                        Label { text: qsTr("TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemTxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemTxLevel=text; page.droidstarRef.set_modemTxLevel(text) } }
-
-                        Label { text: qsTr("RF Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemRFLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemRFLevel=text; page.droidstarRef.set_modemRFLevel(text) } }
-
-                        Label { text: qsTr("TX Delay"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemTxDelay : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemTxDelay=text; page.droidstarRef.set_modemTxDelay(text) } }
-
-                        Label { text: qsTr("CWID TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemCWIdTxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemCWIdTxLevel=text; page.droidstarRef.set_modemCWIdTxLevel(text) } }
-
-                        Label { text: qsTr("D-STAR TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemDstarTxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemDstarTxLevel=text; page.droidstarRef.set_modemDstarTxLevel(text) } }
-
-                        Label { text: qsTr("DMR TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemDMRTxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemDMRTxLevel=text; page.droidstarRef.set_modemDMRTxLevel(text) } }
-
-                        Label { text: qsTr("YSF TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemYSFTxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemYSFTxLevel=text; page.droidstarRef.set_modemYSFTxLevel(text) } }
-
-                        Label { text: qsTr("P25 TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemP25TxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemP25TxLevel=text; page.droidstarRef.set_modemP25TxLevel(text) } }
-
-                        Label { text: qsTr("NXDN TX Level"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemNXDNTxLevel : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemNXDNTxLevel=text; page.droidstarRef.set_modemNXDNTxLevel(text) } }
-
-                        Label { text: qsTr("Baud"); opacity: 0.6; font.pixelSize: 11 }
-                        TextField { Layout.fillWidth: true; text: page.appState ? page.appState.modemBaud : ""; onEditingFinished: { if (!page.appState) return; page.appState.modemBaud=text; page.droidstarRef.set_modemBaud(text) } }
+                    Repeater {
+                        model: page.modemFields
+                        delegate: FormField {
+                            required property var modelData
+                            label: modelData.label
+                            value: page.appState ? page.appState[modelData.prop] : ""
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                            onEdited: function(v) { page.editState(modelData.prop, v) }
+                            onCommitted: function(v) { page.commitState(modelData.prop, modelData.setter, v) }
+                        }
                     }
                 }
             }
@@ -890,45 +1026,56 @@ Page {
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Maintenance")
-                expanded: page.maintenanceExpanded
-                onExpandedChanged: page.maintenanceExpanded = expanded
+                expanded: false
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: page.cols2
+                        columnSpacing: 10
+                        rowSpacing: 10
 
-                        Button {
+                        AppButton {
                             Layout.fillWidth: true
                             text: qsTr("Update Hosts")
-                            onClicked: page.droidstarRef.update_host_files()
+                            glyph: "\uf233"
+                            onClicked: if (page.app) page.app.updateHostFiles()
                         }
-                        Button {
+                        AppButton {
                             Layout.fillWidth: true
                             text: qsTr("Update ID Files")
-                            onClicked: page.droidstarRef.update_dmr_ids()
+                            glyph: "\uf2c2"
+                            onClicked: if (page.app) page.app.updateIdFiles()
+                        }
+                        AppButton {
+                            Layout.fillWidth: true
+                            Layout.columnSpan: page.cols2
+                            text: qsTr("Clear recent talkgroups")
+                            glyph: "\uf1da"
+                            enabled: !!(page.appState && page.appState.recentTgids && page.appState.recentTgids.length > 0)
+                            onClicked: {
+                                if (!page.app) return
+                                page.app.clearRecentTalkgroups()
+                                page.app.notify(qsTr("Recent talkgroups cleared"), "", null, "success")
+                            }
                         }
                     }
 
-                    ColumnLayout {
+                    AppButton {
+                        id: downloadButton
                         Layout.fillWidth: true
-                        spacing: 4
-                        Label { text: qsTr("Download File"); font.pixelSize: 11; opacity: 0.6 }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-                            TextField {
-                                id: downloadUrl
-                                Layout.fillWidth: true
-                                placeholderText: qsTr("URL (vocoder/hosts/etc)")
-                                inputMethodHints: Qt.ImhUrlCharactersOnly
+                        Layout.minimumWidth: 0
+                        text: qsTr("Download")
+                        glyph: "\uf019"
+                        tone: "primary"
+                        onClicked: {
+                            if (page.droidstarRef) {
+                                page.droidstarRef.update_host_files()
+                                page.droidstarRef.update_dmr_ids()
                             }
-                            Button {
-                                text: qsTr("Download")
-                                onClicked: page.droidstarRef.download_file(downloadUrl.text, true)
-                            }
+                            if (page.app) page.app.notify(qsTr("Download started"), "", null, "info")
                         }
                     }
                 }
@@ -939,55 +1086,34 @@ Page {
             // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Text-to-Speech")
-                expanded: page.ttsExpanded
-                visible: (typeof USE_FLITE !== "undefined" && USE_FLITE)
-                onExpandedChanged: page.ttsExpanded = expanded
+                expanded: false
+                visible: page.ttsAvailable
 
                 content: ColumnLayout {
                     spacing: 12
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-                        ButtonGroup { id: ttsGroup }
-
-                        Repeater {
-                            model: [qsTr("None"), qsTr("Voice 1"), qsTr("Voice 2")]
-                            delegate: Rectangle {
-                                Layout.fillWidth: true
-                                height: 40
-                                radius: 10
-                                color: ttsRadio.checked ? Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.2) : t.surface2
-                                border.color: ttsRadio.checked ? t.accent : t.stroke
-                                border.width: 1
-
-                                RadioButton {
-                                    id: ttsRadio
-                                    anchors.centerIn: parent
-                                    text: modelData
-                                    checked: index === 0
-                                    ButtonGroup.group: ttsGroup
-                                    onClicked: page.droidstarRef.tts_changed(text)
-                                }
-                            }
-                        }
+                    SegmentedControl {
+                        options: [
+                            { label: qsTr("Mic"),  value: "Mic" },
+                            { label: qsTr("TTS1"), value: "TTS1" },
+                            { label: qsTr("TTS2"), value: "TTS2" },
+                            { label: qsTr("TTS3"), value: "TTS3" }
+                        ]
+                        currentValue: page.appState ? page.appState.ttsVoice : "Mic"
+                        onSelected: function(value) { if (page.app) page.app.setTtsVoice(value) }
                     }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 4
-                        Label { text: qsTr("TTS Text"); font.pixelSize: 11; opacity: 0.6 }
-                        TextField {
-                            Layout.fillWidth: true
-                            placeholderText: qsTr("Text to speak")
-                            onEditingFinished: page.droidstarRef.tts_text_changed(text)
-                        }
+                    FormField {
+                        label: qsTr("TTS Text")
+                        value: page.appState ? page.appState.ttsText : ""
+                        placeholderText: qsTr("Text to speak on TX")
+                        onEdited: function(v) { page.editState("ttsText", v) }
+                        onCommitted: function(v) { if (page.app) page.app.setTtsText(v) }
                     }
                 }
             }
 
-            // Bottom spacer
-            Item { Layout.preferredHeight: 40 }
+            Item { Layout.preferredHeight: 24 }
         }
     }
 }

@@ -1,126 +1,103 @@
-# Modified DROIDSTAR DMR App for iOS & Android
+# DroidStar DMR for iOS
 
-## 📢 Important Announcement
+**Version 0.45.05** · by VU3LVO (Rohith Namboothiri)
 
-**Please note:** I will no longer be maintaining the Android version, at least for the near future. Due to the complexity of maintaining both iOS and Android versions simultaneously, I've made the decision to focus exclusively on iOS development. 
+DroidStar DMR puts digital amateur radio on your iPhone and iPad. Talk worldwide over DMR, read incoming audio as live text, scan Talk Groups, and follow every QSO from the Dynamic Island. It is free, open source (GPL-3.0), and used by 10,000+ licensed hams. You need a licence. You do not need a radio or a hotspot.
 
-**Special Contributor** A huge thanks and shout-out to VU2TBR (T. Bala) for his valuable feedback and idea contributions. His inputs played a major role in helping me design and refine these features.
+**The home for this project is [vu3lvo.com/droidstar](https://vu3lvo.com/droidstar).** Feature tour, version history, Parrot demo, privacy policy, and how to get on the air all live there. This repository is the source.
+
+This is a fork of [Doug McLain’s DroidStar](https://github.com/nostar/DroidStar). It is built with Qt 6 for iOS 14 and later.
 
 ---
 
-This project is a modified version of the [original Droidstar App](https://github.com/nostar/DroidStar) by Doug McLain. The modifications introduce new features and enhancements to improve user experience and functionality.
+## Get the iOS app
 
-This project uses QT 6.7.2
+DroidStar for iOS is distributed through Apple TestFlight. Apple allows only 10,000 testers, so invites are sent one by one. There is no public TestFlight link.
 
-## What's New in the Latest Update
+Request an invite at **[vu3lvo.com/droidstar/testflight](https://vu3lvo.com/droidstar/testflight)**.
 
-I'm thrilled to announce a major update with significant improvements and highly requested features:
+1. Fill in the form with your callsign and the email address of your Apple ID.
+2. Install Apple’s free TestFlight app from the App Store.
+3. Open the invite email, tap **Start Testing**, and install DroidStar.
 
-- **Complete Major Design Overhaul**: Fresh UI, smoother navigation, and a much cleaner overall experience that modernizes the entire app.
+Questions: [hi@vu3lvo.com](mailto:hi@vu3lvo.com)
 
-- **Dynamic Island Support for iOS**: One of the most requested features! You can now monitor activity and status right from the Dynamic Island, providing at-a-glance information without opening the app.
+Android development is paused while the iPhone and iPad app is the focus. A new Android build, and a web version, are on the roadmap at [vu3lvo.com/droidstar](https://vu3lvo.com/droidstar).
 
-- **iPhone Notification Center Display**: Real-time TX/RX status updates are now visible in the notification center, keeping you informed even when multitasking.
+---
 
-- **Lock Screen TX/RX Display**: Monitor transmission and reception activity directly from your iPhone's lock screen for ultimate convenience.
+## What’s new in 0.45.05
 
-- **Control QSO Log Length**: Adjust how many entries you want to keep directly from the QSO page without digging into settings. Customize your log management with ease.
+Audio only. Transmit voice was coming out muffled, especially on close talk into the mic. 0.45.05 improves that TX enhancement so the muddiness is taken off the microphone audio before it is encoded. The vocoder, receive audio, and every other feature are the same as 0.45.04.
 
-- **Toggle Self-TX Logging**: A small but powerful quality-of-life improvement for those who prefer cleaner logs. Turn self-transmission logging on or off based on your preference.
+The full notes for 0.45.01 through 0.45.04 are on [vu3lvo.com/droidstar](https://vu3lvo.com/droidstar).
 
-And this is just the beginning. More updates are coming soon, including a few surprises I think you'll really enjoy!
+---
 
-## Previous Features
+## Also in the 0.45 line
 
-I am excited to share several features and improvements that have been previously released:
+- **BrandMeister ODTP.** Open DMR Terminal Protocol on UDP 54006, with automatic fallback to the standard HomeBrew protocol, and a Settings switch to turn ODTP on or off.
+- **AllStar.** An AllStar password field, IAX WT support, and fixes for IAX connections.
+- **Multilingual live transcription.** Apple’s on-device speech recognition, or a downloaded model that runs entirely on the phone. Transcripts can be kept with the QSO log. The feature is still marked beta.
+- **Talk Group scanner and favourites.** Star the groups you care about, scan them with global BrandMeister activity, and tap once to join a conversation.
+- **Net reminders.** Save net schedules and get a notification when it is time to check in.
+- **Dynamic Island, Notification Center, and Lock Screen.** TX/RX state, callsign, and Talk Group without opening the app.
+- **QSO log.** Callsign, DMR ID, Talk Group, name, country, and local time, kept across restarts. Set the log length, turn self-TX logging on or off, export selected rows as ADIF or CSV, and share them. One tap opens QRZ, BrandMeister, or APRS.
+- **Who’s calling.** The operator’s name and country are looked up from the DMR ID and shown under the callsign.
+- **Bluetooth, wired headsets, and background RX.** Headset microphones are used for TX. Receive keeps playing in the background and in silent mode.
+- **Recent Talk Groups.** The TG field remembers what you have dialed, so you do not have to keep the numbers in your head.
 
-- **Automatic Operator Information Display**: The app now automatically fetches the operator's first name (referred to as the "Handle") based on their DMR ID and displays it below the "Call Sign." The operator's "Country" is also displayed next to the "Handle."
+### Modes
 
-- **New QSO Tab**: A new QSO Tab has been introduced, which logs the 250 most recent calls (Last Heard). This tab displays the Call Sign, DMR ID, TGID, Handle, Country, and logged time in local time. The logs are now persistently stored, remaining intact even after restarting the app.
+DMR on BrandMeister (ODTP and HomeBrew), YSF, M17, P25, NXDN, D-STAR reflectors (REF, XRF, DCS), and AllStar over IAX.
 
-- **TX Button and Net Status Integration**: The QSO Tab now includes a TX button with integrated Net Status, providing real-time feedback on the connection status (Host Connected or Not Connected).
+DMR text messaging is on the roadmap. It is not in 0.45.05.
 
-- **Enhanced Export Options**: You can now export QSO logs in CSV or ADIF formats. Additionally, you can selectively choose specific log entries for inclusion in the exported file. You can also share the exported file directly from the app via WhatsApp, email, or any other app on your device.
+---
 
-- **"Last Heard" on Home Page**: The app now features "Last Heard" as two rows on the home page, providing quick access to recent transmissions. The AMBES notification has been moved to the Settings for better organization.
+## Feedback
 
-- **Quick Access Buttons**: Added a button in the QSO entries that opens a menu to visit the station's QRZ, BM, and APRS pages directly from the app.
+If the new TX audio still sounds muffled on your radio or hotspot, say so. Send notes through TestFlight, open an issue on this repository, or email [hi@vu3lvo.com](mailto:hi@vu3lvo.com). A lot of what is already in the app, including ODTP, started as a tester request.
 
-- **Background Functionality for Android & iOS Users**: The app now supports background operation for Android & iOS users, allowing it to continue running while switching between applications. This feature is particularly useful for tasks like checking a station's QRZ page while maintaining uninterrupted RX. iOS users will now be able to connect to Bluetooth devices as well.
+Join the WhatsApp channel for release news and polls: [inz.to/BVmSa](https://inz.to/BVmSa). The same news is posted at [vu3lvo.com/droidstar](https://vu3lvo.com/droidstar).
 
-- **Simplified User Interface**: The user interface has been simplified by replacing the text "Main" with a "Home" icon for a more intuitive experience.
-
-- **Recent TG-ID Dropdown**: The dropdown records all the recently dialed Talk Group ids and lets you choose from the list. You no longer have to memorize the TG ID.
-
-  
-## Downloads
-
-- ~~For Android users, you can download the app via [this link](https://inz.to/droidstar-vu3lvo).~~
-- ~~For older Android versions (Armabi_v7a), please use [this link](https://inz.to/droidstar-vu3lvo).~~
-
-- For iOS users, the iOS version is now available! Due to the 10k limit on TestFlight, I won't be posting the invitation link publicly. If you're interested in testing the iOS version, please mail me at vu3lvo@proton.me.
-
-## Feedback and Support
-
-Please let me know if these features are working correctly on your device. If you have any ideas or feedback, feel free to reach out. Your input is invaluable in making this app better!
-
-## Stay Updated
-Join my WhatsApp channel to stay updated on the progress, new features and to participate in polls to get your dream features / ideas implemented in DroidStar. [**Join Now**](https://inz.to/BVmSa)
+---
 
 ## Acknowledgments
 
-This project is based on the original work by [Doug McLain](https://github.com/nostar/). Many thanks to Doug for his excellent foundation and contributions to the digital radio community.
+This project stands on [Doug McLain’s DroidStar](https://github.com/nostar/). Thank you, Doug, for the foundation and for what it has meant to digital voice.
+
+Thank you to **VU2TBR (T. Bala)** for the feedback and ideas that shaped a lot of the early design, and to **BD4VHI** for the Chinese translation of the September 2024 build.
+
+---
+
+## Contributors
+
+DroidStar stays free, with no ads and no subscription, because hams pay for the Apple developer account, test radios, and the time to keep shipping.
+
+The full wall is at **[vu3lvo.com/droidstar/contributors](https://vu3lvo.com/droidstar/contributors)**: 157 contributors, 183 contributions, and callsigns from 18 countries. That page is the list of record. Names there can be heard in Morse, and a note to [hi@vu3lvo.com](mailto:hi@vu3lvo.com) changes or removes an entry.
+
+If DroidStar has a place on your home screen, a coffee keeps it on the air:
+
+- [Buy me a coffee](https://buymeacoffee.com/rohithz)
+- [PayPal](https://www.paypal.com/ncp/payment/NU89529268M2W)
+
+---
+
+## Privacy
+
+DroidStar has no accounts, analytics, or tracking. QSO logs, settings, favourite Talk Groups, net reminders, and transcripts stay on the device. The app talks directly to the networks you choose, the same way a radio would. The website uses no cookies or analytics.
+
+Details: [vu3lvo.com/droidstar/privacy](https://vu3lvo.com/droidstar/privacy)
+
+---
 
 ## License
 
-This project, including modifications, is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
-
-## Support
-
-If you would like to support the development of the Droidstar DMR iOS TestFlight or public release, you can **[buy me a coffee](https://buymeacoffee.com/rohithz)**.
+This project, including these modifications, is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
 
 ---
 
-**73 VU3LVO - Rohith**
+**73 de VU3LVO — Rohith**
 
----
-
-## 🌟 Contributors
-
-I deeply appreciate the incredible contributions by our patrons/contributors who have played a vital role in supporting me in keeping this project running. Your passion and commitment drive me forward, and I am honored to have you as a part of our journey. Thank you for being an essential part of this project! 🚀
-
-### Special Thanks To:
-
-- **@TXDMR** • [Reddit](https://www.reddit.com/user/TXDMR)
-- **@Impossible_Duty_8935** • [Reddit](https://www.reddit.com/user/Impossible_Duty_8935)
-- **houjoe318**
-- **beny6258**
-- **Tim GW4VXE**
-- **Ian R**
-- **N2HT**
-- **steff6272**
-- **Mark Flett**
-- **Marco KC2ZMA**
-- **Ray**
-- **K7RAN**
-- **ZL2BEZ**
-- **Vk4sm**
-- **WA3ADI**
-- **Ve2kjf**
-- **DG9MAQ**
-- **Stefan Kowal**
-- **AC1SM**
-- **Mal - VK3TV**
-- **Dennis@w2kdc**
-- **William Golden**
-- **Michael Kilsby**
-- **Esteban Mackay Quiel**
-- **KQ4HJH**
-- **Mattias**
-- **Luis Valencia castaño**
-- **Marco Iapicca**
-
-
----
-
-Want to see your name here? Contribute today (**[buy me a coffee](https://buymeacoffee.com/rohithz)**./**[Contribute Via PayPal](https://www.paypal.com/ncp/payment/NU89529268M2W)**) and join me in building the most advanced, modern, robust Digital Radio Mobile App that would help thousands of Amateur Radio Operators around the world who cannot affort expensive gears!
+[vu3lvo.com/droidstar](https://vu3lvo.com/droidstar) · [TestFlight invite](https://vu3lvo.com/droidstar/testflight) · [Contributors](https://vu3lvo.com/droidstar/contributors)

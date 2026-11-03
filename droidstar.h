@@ -1,6 +1,6 @@
 /*
     Copyright (C) 2019-2021 Doug McLain
-    Modification Copyright (C) 2024 Rohith Namboothiri
+    Modification Copyright (C) 2024-2026 Rohith Namboothiri
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,6 +20,10 @@
 #define DROIDSTAR_H
 
 #include <QObject>
+#include <QVariantMap>
+#include <QVariantList>
+#include <QHash>
+#include <QPointer>
 #include "mode.h"
 #include "audioengine.h"  // Make sure AudioEngine is included
 
@@ -40,8 +44,27 @@ public:
     ~DroidStar();
     
     Q_INVOKABLE void addRecentTGID(const QString& tgid);
+    Q_INVOKABLE void removeRecentTGID(const QString& tgid);
     Q_INVOKABLE QStringList loadRecentTGIDs() const;
     Q_INVOKABLE void clearRecentTGIDs();
+
+    // Favourite (Starred / Pinned) Talkgroups
+    Q_INVOKABLE QStringList loadFavouriteTGIDs() const;
+    Q_INVOKABLE void toggleFavouriteTGID(const QString& tgid);
+    Q_INVOKABLE void addFavouriteTGID(const QString& tgid);
+    Q_INVOKABLE void removeFavouriteTGID(const QString& tgid);
+    Q_INVOKABLE bool isFavouriteTGID(const QString& tgid) const;
+
+    // Talkgroup directory & BrandMeister Hoseline real-time active TG scanner
+    Q_INVOKABLE QString getTalkgroupName(const QString& tgid) const;
+    Q_INVOKABLE QVariantList searchTalkgroups(const QString& query, int limit = 60) const;
+    Q_INVOKABLE void setHoselineActive(bool active);
+    Q_INVOKABLE bool isHoselineActive() const { return m_hoselineActive; }
+    Q_INVOKABLE void refreshHoseline();
+    Q_INVOKABLE QVariantList getHoselineCalls() const;
+    Q_INVOKABLE QVariantList getActiveFavouriteCalls() const;
+    Q_INVOKABLE QVariantMap getHoselineStatus() const;
+
     Q_INVOKABLE void updateNowPlayingRX(const QString& callsign, const QString& name, const QString& country);
     void setup_state_change_listeners();
     
@@ -53,6 +76,8 @@ signals:
     void input_source_changed(int, QString);
     void tgidsUpdated(const QStringList& newTgids);
     void recentTgidsUpdated();
+    void favouriteTgidsUpdated();
+    void hoselineUpdated();
     void mode_changed();
     void module_changed(char);
     void slot_changed(int);
@@ -63,6 +88,7 @@ signals:
     void update_settings();
     void connect_status_changed(int c);
     void in_audio_vol_changed(qreal);
+    void out_audio_vol_changed(qreal);
     void tx_pressed();
     void tx_released();
     void tx_clicked(bool);
@@ -93,9 +119,24 @@ public slots:
 
     void set_callsign(const QString &callsign) {  m_callsign = callsign.simplified(); save_settings(); }
     void set_dmrtgid(const QString &dmrtgid) { m_dmr_destid = dmrtgid.simplified().toUInt(); save_settings(); }
-    void set_slot(const int slot) {emit slot_changed(slot); }
-    void set_cc(const int cc) {emit cc_changed(cc); }
-    void tgid_text_changed(QString s){emit dmr_tgid_changed(s.toUInt());}
+    void set_slot(const int slot) { m_dmr_slot = slot; emit slot_changed(slot); }
+    void set_cc(const int cc) { m_dmr_cc = cc; emit cc_changed(cc); }
+    void tgid_text_changed(QString s)
+    {
+        m_dmr_destid = s.simplified().toUInt();
+        emit dmr_tgid_changed(m_dmr_destid);
+    }
+    void relink_dmr_talkgroup();
+    Q_INVOKABLE void tune_to_talkgroup(const QString &tgid, bool isPrivate = false);
+    Q_INVOKABLE void trigger_auto_tx_punch(int delayMs = 220);
+    Q_INVOKABLE void cancel_tune_reconnect();
+    Q_INVOKABLE bool is_tuning_reconnect() const;
+    Q_INVOKABLE bool is_auto_tx_punch_pending() const;
+    Q_INVOKABLE bool is_odtp_active() const { return m_odtpActive; }
+    Q_INVOKABLE bool is_odtp_host(const QString &refname) const;
+    Q_INVOKABLE bool is_tgif_host() const;
+    void set_bm_odtp(bool on) { m_bm_odtp = on; save_settings(); }
+    bool get_bm_odtp() const { return m_bm_odtp; }
     void set_dmrid(const QString &dmrid) { m_dmrid = dmrid.simplified().toUInt(); save_settings(); }
     void set_essid(const QString &essid)
     {
@@ -107,8 +148,30 @@ public slots:
             m_essid = 0;
         }
     }
-    void set_bm_password(const QString &bmpwd) { m_bm_password = bmpwd; save_settings(); }
-    void set_tgif_password(const QString &tgifpwd) { m_tgif_password = tgifpwd; save_settings(); }
+    void set_bm_password(const QString &bmpwd)
+    {
+        QString cleaned = bmpwd;
+        cleaned.replace(QChar(0x2018), '\'').replace(QChar(0x2019), '\'')
+               .replace(QChar(0x201C), '"').replace(QChar(0x201D), '"');
+        m_bm_password = cleaned;
+        save_settings();
+    }
+    void set_tgif_password(const QString &tgifpwd)
+    {
+        QString cleaned = tgifpwd;
+        cleaned.replace(QChar(0x2018), '\'').replace(QChar(0x2019), '\'')
+               .replace(QChar(0x201C), '"').replace(QChar(0x201D), '"');
+        m_tgif_password = cleaned;
+        save_settings();
+    }
+    void set_asl_password(const QString &aslpwd)
+    {
+        QString cleaned = aslpwd;
+        cleaned.replace(QChar(0x2018), '\'').replace(QChar(0x2019), '\'')
+               .replace(QChar(0x201C), '"').replace(QChar(0x201D), '"');
+        m_asl_password = cleaned;
+        save_settings();
+    }
     void set_latitude(const QString &lat){ m_latitude = lat; save_settings(); }
     void set_longitude(const QString &lon){ m_longitude = lon; save_settings(); }
     void set_location(const QString &loc){ m_location = loc; save_settings(); }
@@ -118,10 +181,19 @@ public slots:
     void set_swid(const QString &swid){ m_swid = swid; save_settings(); }
     void set_pkgid(const QString &pkgid){ m_pkgid = pkgid; save_settings(); }
     void set_dmr_options(const QString &dmropts) { m_dmropts = dmropts; save_settings(); }
-    void set_dmr_pc(int pc) { m_pc = pc; emit dmrpc_state_changed(m_pc); }
-    void set_module(const QString &module) { m_module = module.toStdString()[0]; save_settings(); emit module_changed(m_module);}
+    void set_dmr_pc(int pc) { m_pc = pc ? 1 : 0; emit dmrpc_state_changed(m_pc); }
+    bool get_dmr_pc() { return m_pc != 0; }
+    void set_module(const QString &module)
+    {
+        if (!module.isEmpty()) {
+            m_module = module.at(0).toLatin1();
+            save_settings();
+            emit module_changed(m_module);
+        }
+    }
     void set_protocol(const QString &protocol) { m_protocol = protocol; save_settings(); }
     void set_input_volume(qreal v);
+    void set_output_volume(qreal v);
     void set_modelchange(bool t){ m_modelchange = t; }
     void set_mycall(const QString &mycall) { m_mycall = mycall; save_settings(); emit mycall_changed(mycall); }
     void set_urcall(const QString &urcall) { m_urcall = urcall; save_settings(); emit urcall_changed(urcall); }
@@ -134,11 +206,68 @@ public slots:
     void set_ipv6(bool ipv6) { m_ipv6 = ipv6; save_settings(); }
     void set_vocoder(QString vocoder) { m_vocoder = vocoder; }
     void set_modem(QString modem) { m_modem = modem; }
-    void set_playback(QString playback) { m_playback = playback; }
-    void set_capture(QString capture) { m_capture = capture; }
+    void set_playback(QString playback)
+    {
+        m_playback = mapFriendlyNameToDeviceSafe(playback);
+    }
+    void set_capture(QString capture)
+    {
+        m_capture = mapFriendlyNameToDeviceSafe(capture);
+        if (m_audioEngine) {
+            m_audioEngine->setInputDevice(m_capture);
+        }
+    }
     void set_swtx(bool swtx) { emit swtx_state_changed(swtx); }
     void set_swrx(bool swrx) { emit swrx_state_changed(swrx); }
-    void set_agc(bool agc) { emit agc_state_changed(agc); }
+    void set_agc(bool agc) { m_agc = agc; emit agc_state_changed(agc); }
+    void set_noise_reduction_mode(int mode)
+    {
+        AudioEngine::setGlobalNoiseMode(mode);
+        if (m_settings && m_settings_processed) {
+            m_settings->setValue("AUDIO_NR_MODE", AudioEngine::savedUserNoiseMode());
+        }
+    }
+    int get_noise_reduction_mode() { return AudioEngine::globalNoiseMode(); }
+    void set_hd_upscale(bool on)
+    {
+        AudioEngine::setGlobalHdUpscale(on);
+        if (m_settings && m_settings_processed) {
+            m_settings->setValue("AUDIO_HD_UPSCALE", AudioEngine::savedUserHdUpscale());
+        }
+    }
+    bool get_hd_upscale() { return AudioEngine::globalHdUpscale(); }
+    void set_tx_enhance(bool on)
+    {
+        AudioEngine::setGlobalTxEnhance(on);
+        if (m_settings && m_settings_processed) {
+            m_settings->setValue("AUDIO_TX_ENHANCE", AudioEngine::savedUserTxEnhance());
+        }
+    }
+    bool get_tx_enhance() { return AudioEngine::globalTxEnhance(); }
+    void set_voice_isolation(bool on)
+    {
+        AudioEngine::setGlobalVoiceIsolation(on);
+        if (m_settings && m_settings_processed) {
+            m_settings->setValue("AUDIO_VOICE_ISOLATION", AudioEngine::globalVoiceIsolation());
+        }
+    }
+    bool get_voice_isolation() { return AudioEngine::globalVoiceIsolation(); }
+    void set_rx_clean(bool on)
+    {
+        AudioEngine::setGlobalRxClean(on);
+        if (m_settings && m_settings_processed) {
+            m_settings->setValue("AUDIO_RX_CLEAN", AudioEngine::globalRxClean());
+        }
+    }
+    bool get_rx_clean() { return AudioEngine::globalRxClean(); }
+    void set_spk_preamp_db(qreal db)
+    {
+        AudioEngine::setGlobalSpkPreampDb(static_cast<float>(db));
+        if (m_settings && m_settings_processed) {
+            m_settings->setValue("AUDIO_SPK_PREAMP_DB", AudioEngine::globalSpkPreampDb());
+        }
+    }
+    qreal get_spk_preamp_db() { return static_cast<qreal>(AudioEngine::globalSpkPreampDb()); }
     void set_mmdvm_direct(bool mmdvm) { m_mdirect = mmdvm; process_mode_change(m_protocol); }
     void set_iaxport(const QString &port){ m_iaxport = port.simplified().toUInt(); save_settings(); }
     void set_dst(QString dst){emit dst_changed(dst);}
@@ -201,6 +330,7 @@ public slots:
     QString get_essid() { return m_essid ? QString("%1").arg(m_essid - 1, 2, 10, QChar('0')) : "None"; }
     QString get_bm_password() { return m_bm_password; }
     QString get_tgif_password() { return m_tgif_password; }
+    QString get_asl_password() { return m_asl_password; }
     QString get_latitude() { return m_latitude; }
     QString get_longitude() { return m_longitude; }
     QString get_location() { return m_location; }
@@ -259,6 +389,10 @@ public slots:
     void setCaptureDevice(const QString &deviceName);
     QStringList get_playbacks();
     QStringList get_captures();
+    QString mapFriendlyNameToDeviceSafe(const QString &friendlyName) const
+    {
+        return m_audioEngine ? m_audioEngine->mapFriendlyNameToDevice(friendlyName) : friendlyName;
+    }
 
     
 
@@ -277,7 +411,8 @@ public slots:
 #endif
     QString get_arch() { return QSysInfo::currentCpuArchitecture(); }
     QString get_build_abi() { return QSysInfo::buildAbi(); }
-    QString get_software_build() { return VERSION_NUMBER; }
+    QString get_software_build();
+    QVariantMap get_safe_area();
     
 
 
@@ -288,6 +423,7 @@ public slots:
     void set_output_level(unsigned short l){ m_outlevel = l; }
     void tts_changed(QString);
     void tts_text_changed(QString);
+    void obtain_asl_wt_creds();
     void attempt_reconnect();
        void start_keep_alive();
        void stop_keep_alive();
@@ -310,6 +446,9 @@ private:
     QString m_protocol;
     QString m_bm_password;
     QString m_tgif_password;
+    QString m_asl_password;
+    QString m_wt_callingname;
+    QString m_wt_callingname_pass;
     QString m_latitude;
     QString m_longitude;
     QString m_location;
@@ -363,8 +502,8 @@ private:
     QStringList m_hostsmodel;
     QMap<QString, QString> m_hostmap;
     QStringList m_customhosts;
-    QThread *m_modethread;
-    Mode *m_mode;
+    QThread *m_modethread = nullptr;
+    Mode *m_mode = nullptr;
     QByteArray user_data;
     QString m_localhosts;
     int m_iaxport;
@@ -409,8 +548,66 @@ private:
     bool m_modemTxInvert;
     bool m_modemRxInvert;
     bool m_modemPTTInvert;
+    qreal m_inVol { 0.5 };
+    qreal m_outVol { 1.0 };
+    bool m_agc { true };
+    int m_dmr_slot { 1 };
+    int m_dmr_cc { 1 };
+    bool m_bm_odtp { true };
+    bool m_odtpActive { false };
+    bool m_tuningReconnect { false };
+    bool m_autoTxPunchRunning { false };
     QTimer *m_reconnectTimer;
-     QTimer *m_keepAliveTimer;
+    QTimer *m_keepAliveTimer;
+    QTimer *m_tuneReconnectTimer { nullptr };
+    QTimer *m_autoTxPunchStartTimer { nullptr };
+    QTimer *m_autoTxPunchStopTimer { nullptr };
+    void stop_mode_thread();
+
+    // Talkgroup name dictionary & BrandMeister Hoseline real-time stream state
+    struct HoselineCall {
+        int tgid { 0 };
+        QString tgName;
+        uint32_t sourceId { 0 };
+        QString sourceCall;
+        QString sourceName;
+        QString talkerAlias;
+        QString master;
+        QString linkCall;
+        QString sessionId;
+        qint64 startSec { 0 };
+        qint64 stopSec { 0 };
+        qint64 lastUpdatedMs { 0 };
+    };
+    QHash<int, QString> m_tgNames;
+    QHash<int, QString> m_tgifTgNames;
+    QHash<int, HoselineCall> m_hoselineCalls;
+    QNetworkAccessManager *m_hoselineNam { nullptr };
+    QPointer<QNetworkReply> m_hoselinePollReply;
+    QPointer<QNetworkReply> m_hoselinePostReply;
+    QStringList m_hoselinePostQueue;
+    QString m_hoselineSid;
+    bool m_hoselineActive { false };
+    bool m_hoselineConnected { false };
+    bool m_hoselineJoined { false };
+    bool m_hoselineDirty { false };
+    QTimer *m_hoselineUiTimer { nullptr };
+    QTimer *m_hoselineReconnectTimer { nullptr };
+
+    void initTalkgroupDirectory();
+    void loadTalkgroupCache();
+    void loadTgifTalkgroupCache();
+    void parseTgifTalkgroupsCsv(const QByteArray &raw);
+    void fetchBrandMeisterTalkgroups();
+    void fetchTgifTalkgroups();
+    void startHoselineSession();
+    void stopHoselineSession();
+    void startNextHoselinePoll();
+    void queueHoselinePost(const QString &payload);
+    void flushHoselinePostQueue();
+    void handleHoselinePacket(const QString &packet);
+    void handleHoselineMqttPayload(const QString &topic, const QString &payloadStr);
+    void onHoselineUiTick();
  
 #ifdef Q_OS_ANDROID
     AndroidSerialPort *m_USBmonitor;
@@ -434,7 +631,14 @@ private slots:
     void update_data(Mode::MODEINFO);
     void updatelog(QString);
     void save_settings();
-    void update_output_level(unsigned short l){ m_outlevel = l;}
+    void update_output_level(unsigned short l)
+    {
+        if (connect_status == Mode::DISCONNECTED) {
+            m_outlevel = 0;
+            return;
+        }
+        m_outlevel = l;
+    }
     //void load_md380_fw();
 };
 

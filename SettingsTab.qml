@@ -284,6 +284,11 @@ ComboBox {
 			height: 25
 			selectByMouse: true
 			echoMode: TextInput.Password
+			passwordMaskDelay: 0
+			inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+			onEditingFinished: {
+				droidstar.set_bm_password(bmpwedit.text)
+			}
 		}
 		Text {
 			id: tgifpwLabel
@@ -303,6 +308,11 @@ ComboBox {
 			height: 25
 			selectByMouse: true
 			echoMode: TextInput.Password
+			passwordMaskDelay: 0
+			inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText | Qt.ImhSensitiveData
+			onEditingFinished: {
+				droidstar.set_tgif_password(tgifpwedit.text)
+			}
 		}
 		Text {
 			id: latLabel

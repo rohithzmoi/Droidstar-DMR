@@ -30,8 +30,8 @@ int MicPermission::check_permission()
     AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
     if(status != AVAuthorizationStatusAuthorized){
         [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
-
+            (void)granted;
         }];
     }
-    return status;
+    return static_cast<int>(status);
 }

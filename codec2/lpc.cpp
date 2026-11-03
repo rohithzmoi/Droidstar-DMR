@@ -25,6 +25,11 @@
   along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#endif
+
 #define LPC_MAX_N 512		/* maximum no. of samples in frame */
 #define PI 3.141592654		/* mathematical constant */
 

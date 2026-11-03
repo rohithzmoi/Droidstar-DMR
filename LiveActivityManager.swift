@@ -17,8 +17,6 @@
 
 import Foundation
 import ActivityKit
-// Note: SwiftUI and Widget struct moved to separate Widget Extension target
-// For now, we only need ActivityKit for the LiveActivityManager
 
 // IMPORTANT:
 // We explicitly set the Objective-C runtime name so ObjC/ObjC++ can link against
@@ -26,67 +24,61 @@ import ActivityKit
 @available(iOS 16.1, *)
 @objc(LiveActivityManager)
 class LiveActivityManager: NSObject {
-    // Singleton instance
     @objc static let shared = LiveActivityManager()
-    
+
     private var activity: Activity<DroidStarActivityAttributes>?
-    private let activityQueue = DispatchQueue(label: "com.droiddstar.liveactivity")
-    
+    private let activityQueue = DispatchQueue(label: "com.droidstar.liveactivity", qos: .userInitiated)
+
+    // Track last pushed state to avoid redundant ActivityKit IPC calls and preserve over timer
+    private var lastMode: String = ""
+    private var lastCallsign: String = ""
+    private var lastHandle: String = ""
+    private var lastCountry: String = ""
+    private var lastTgid: String = ""
+    private var currentOverStartDate: Date = Date()
+
     private override init() {
         super.init()
     }
-    
+
     // MARK: - Public API
-    
-    /// Check if Dynamic Island is available on this device
+
+    /// Check if Live Activities / Dynamic Island are enabled on this device
     @objc static var isDynamicIslandAvailable: Bool {
-        if #available(iOS 16.1, *) {
-            let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
-            if !enabled {
-                print("[DroidStar][LiveActivity] areActivitiesEnabled == false")
-            }
-            return enabled
+        let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
+        if !enabled {
+            print("[DroidStar][LiveActivity] areActivitiesEnabled == false")
         }
-        return false
+        return enabled
     }
-    
+
     /// Start or update a live activity with QSO details
-    /// mode: "RX" or "TX"
+    /// mode: "RX", "TX", or "IDLE"
     @objc(startOrUpdateLiveActivityWithMode:callsign:handle:country:tgid:)
     func startOrUpdateLiveActivity(mode: String, callsign: String, handle: String, country: String, tgid: String) {
-        if #available(iOS 16.1, *) {
-            activityQueue.async { [weak self] in
-                self?._startOrUpdateActivity(mode: mode, callsign: callsign, handle: handle, country: country, tgid: tgid)
-            }
+        activityQueue.async { [weak self] in
+            self?._startOrUpdateActivity(mode: mode, callsign: callsign, handle: handle, country: country, tgid: tgid)
         }
     }
-    
+
     /// End the current live activity
     @objc func endLiveActivity() {
-        if #available(iOS 16.1, *) {
-            activityQueue.async { [weak self] in
-                self?._endActivity()
-            }
+        activityQueue.async { [weak self] in
+            self?._endActivity()
         }
     }
-    
+
     /// End ALL live activities (cleanup orphans from previous runs)
     @objc func endAllActivities() {
-        if #available(iOS 16.1, *) {
-            activityQueue.async { [weak self] in
-                self?._endAllActivities()
-            }
+        activityQueue.async { [weak self] in
+            self?._endAllActivities()
         }
     }
-    
+
     /// Update QSO details in the live activity
     @objc(updateQsoDetailsWithMode:callsign:handle:country:tgid:)
     func updateQsoDetails(mode: String, callsign: String, handle: String, country: String, tgid: String) {
-        if #available(iOS 16.1, *) {
-            activityQueue.async { [weak self] in
-                self?._updateActivity(mode: mode, callsign: callsign, handle: handle, country: country, tgid: tgid)
-            }
-        }
+        startOrUpdateLiveActivity(mode: mode, callsign: callsign, handle: handle, country: country, tgid: tgid)
     }
 
     // Backwards-compatible ObjC selectors (older code paths)
@@ -97,92 +89,170 @@ class LiveActivityManager: NSObject {
 
     @objc(updateQsoDetailsWithCallsign:handle:country:)
     func updateQsoDetails(callsign: String, handle: String, country: String) {
-        updateQsoDetails(mode: "RX", callsign: callsign, handle: handle, country: country, tgid: "")
+        startOrUpdateLiveActivity(mode: "RX", callsign: callsign, handle: handle, country: country, tgid: "")
     }
-    
+
     // MARK: - Private Methods
-    
+
+    @available(iOS 16.1, *)
+    private func _resolveActiveActivity() -> Activity<DroidStarActivityAttributes>? {
+        if let current = activity {
+            switch current.activityState {
+            case .ended, .dismissed:
+                self.activity = nil
+            default:
+                return current
+            }
+        }
+
+        // Reuse an already-active activity from ActivityKit if one exists
+        if let existing = Activity<DroidStarActivityAttributes>.activities.first(where: {
+            $0.activityState != .ended && $0.activityState != .dismissed
+        }) {
+            self.activity = existing
+            return existing
+        }
+
+        return nil
+    }
+
     @available(iOS 16.1, *)
     private func _startOrUpdateActivity(mode: String, callsign: String, handle: String, country: String, tgid: String) {
-        let attributes = DroidStarActivityAttributes()
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            return
+        }
+
+        // Only reset the elapsed timer when the mode or active callsign changes
+        let stateTransitioned = (mode != lastMode) || (callsign != lastCallsign)
+        if stateTransitioned {
+            currentOverStartDate = Date()
+        }
+
+        let unchanged = !stateTransitioned &&
+                        handle == lastHandle &&
+                        country == lastCountry &&
+                        tgid == lastTgid
+
         let state = DroidStarActivityAttributes.ContentState(
             mode: mode,
             callsign: callsign,
             handle: handle,
             country: country,
             tgid: tgid,
-            timestamp: Date()
+            timestamp: currentOverStartDate
         )
-        
-        if let activity = activity {
-            // Update existing activity
-            Task {
-                await activity.update(using: state)
-                print("[DroidStar][LiveActivity] Updating content for activity \(activity.id)")
+
+        if let activeActivity = _resolveActiveActivity() {
+            if unchanged {
+                return
             }
-        } else {
-            // End any stale/orphan activities from previous runs before starting a new one
+            lastMode = mode
+            lastCallsign = callsign
+            lastHandle = handle
+            lastCountry = country
+            lastTgid = tgid
+
             Task {
-                for existingActivity in Activity<DroidStarActivityAttributes>.activities {
-                    print("[DroidStar][LiveActivity] Ending stale activity: \(existingActivity.id)")
-                    await existingActivity.end(dismissalPolicy: .immediate)
+                if #available(iOS 16.2, *) {
+                    let content = ActivityContent(state: state, staleDate: nil)
+                    await activeActivity.update(content)
+                } else {
+                    await activeActivity.update(using: state)
                 }
             }
-            
-            // Start new activity
+        } else {
+            // Starting a new activity
+            lastMode = mode
+            lastCallsign = callsign
+            lastHandle = handle
+            lastCountry = country
+            lastTgid = tgid
+
             do {
-                print("[DroidStar][LiveActivity] Requesting Live Activity mode=\(mode) callsign=\(callsign) handle=\(handle) country=\(country) tgid=\(tgid)")
-                let newActivity = try Activity.request(
-                    attributes: attributes,
-                    contentState: state,
-                    pushType: nil
-                )
-                
-                activity = newActivity
-                print("[DroidStar][LiveActivity] Started Live Activity: \(newActivity.id)")
+                let attributes = DroidStarActivityAttributes()
+                let newActivity: Activity<DroidStarActivityAttributes>
+                if #available(iOS 16.2, *) {
+                    let content = ActivityContent(state: state, staleDate: nil)
+                    newActivity = try Activity.request(
+                        attributes: attributes,
+                        content: content,
+                        pushType: nil
+                    )
+                } else {
+                    newActivity = try Activity.request(
+                        attributes: attributes,
+                        contentState: state,
+                        pushType: nil
+                    )
+                }
+
+                self.activity = newActivity
+                let keepId = newActivity.id
+                print("[DroidStar][LiveActivity] Started Live Activity: \(keepId) mode=\(mode) callsign=\(callsign)")
+
+                // Clean up any other orphan activities without touching the newly created one
+                Task {
+                    for existing in Activity<DroidStarActivityAttributes>.activities where existing.id != keepId {
+                        if #available(iOS 16.2, *) {
+                            await existing.end(nil, dismissalPolicy: .immediate)
+                        } else {
+                            await existing.end(dismissalPolicy: .immediate)
+                        }
+                    }
+                }
             } catch {
                 print("[DroidStar][LiveActivity] Error starting Live Activity: \(error)")
             }
         }
     }
-    
-    @available(iOS 16.1, *)
-    private func _updateActivity(mode: String, callsign: String, handle: String, country: String, tgid: String) {
-        guard activity != nil else { return }
-        
-        let state = DroidStarActivityAttributes.ContentState(
-            mode: mode,
-            callsign: callsign,
-            handle: handle,
-            country: country,
-            tgid: tgid,
-            timestamp: Date()
-        )
-        
-        Task {
-            await activity?.update(using: state)
-        }
-    }
-    
+
     @available(iOS 16.1, *)
     private func _endActivity() {
-        guard let activity = activity else { return }
-        
+        lastMode = ""
+        lastCallsign = ""
+        lastHandle = ""
+        lastCountry = ""
+        lastTgid = ""
+
+        let current = activity
+        self.activity = nil
+
         Task {
-            await activity.end(dismissalPolicy: .default)
-            self.activity = nil
-            print("[DroidStar][LiveActivity] Ended Live Activity: \(activity.id)")
+            if let current = current {
+                if #available(iOS 16.2, *) {
+                    await current.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await current.end(dismissalPolicy: .immediate)
+                }
+            }
+            for existing in Activity<DroidStarActivityAttributes>.activities {
+                if #available(iOS 16.2, *) {
+                    await existing.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await existing.end(dismissalPolicy: .immediate)
+                }
+            }
+            print("[DroidStar][LiveActivity] Ended Live Activity")
         }
     }
-    
+
     @available(iOS 16.1, *)
     private func _endAllActivities() {
+        lastMode = ""
+        lastCallsign = ""
+        lastHandle = ""
+        lastCountry = ""
+        lastTgid = ""
+        self.activity = nil
+
         Task {
             for existingActivity in Activity<DroidStarActivityAttributes>.activities {
-                print("[DroidStar][LiveActivity] Ending activity: \(existingActivity.id)")
-                await existingActivity.end(dismissalPolicy: .immediate)
+                if #available(iOS 16.2, *) {
+                    await existingActivity.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await existingActivity.end(dismissalPolicy: .immediate)
+                }
             }
-            self.activity = nil
             print("[DroidStar][LiveActivity] All activities ended")
         }
     }

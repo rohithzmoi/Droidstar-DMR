@@ -2,6 +2,7 @@
  * Project 25 IMBE Encoder/Decoder Fixed-Point implementation
  * Developed by Pavel Yazev E-mail: pyazev@gmail.com
  * Version 1.0 (c) Copyright 2009
+ * Modified Copyright (C) 2024-2026 Rohith Namboothiri
  * 
  * This is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by
@@ -323,7 +324,7 @@ void imbe_vocoder_impl::pitch_est(IMBE_PARAM *imbe_param, Word16 *frames_buf)
 				break;
 			}
 
-			if(cef <= CNST_0_05_Q4_12)
+			if(cef <= (3 * CNST_0_05_Q4_12))
 			{
 				pf = p_index;
 				break;

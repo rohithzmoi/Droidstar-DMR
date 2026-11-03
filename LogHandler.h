@@ -20,6 +20,8 @@
 
 #include <QObject>
 #include <QJsonArray>
+#include <QHash>
+#include <QMutex>
 #include <functional>
 
 class LogHandler : public QObject
@@ -34,10 +36,10 @@ public:
     Q_INVOKABLE bool saveLog(const QString &fileName, const QJsonArray &logData);
     Q_INVOKABLE QJsonArray loadLog(const QString &fileName);
     Q_INVOKABLE bool clearLog(const QString &fileName);
-    Q_INVOKABLE bool exportLogToCsv(const QString &fileName, const QJsonArray &logData);
+    Q_INVOKABLE bool exportLogToCsv(const QString &fileName, const QJsonArray &logData, bool includeTranscripts = false);
     Q_INVOKABLE QString getDSLogPath() const;
     Q_INVOKABLE QString getFriendlyPath(const QString &path) const;
-    Q_INVOKABLE bool exportLogToAdif(const QString &fileName, const QJsonArray &logData);
+    Q_INVOKABLE bool exportLogToAdif(const QString &fileName, const QJsonArray &logData, bool includeTranscripts = false);
     Q_INVOKABLE void shareFile();
 
 signals:
@@ -48,10 +50,12 @@ signals:
 private:
     QString getFilePath(const QString &fileName) const;
     QString lastSavedFilePath;
+    mutable QMutex m_mutex;
+    mutable QHash<QString, QJsonArray> m_cache;
 };
 
-#ifdef Q_OS_IOS
-extern void shareFileOnIOS(const QString &filePath); // Declare the iOS-specific function
+#if defined(Q_OS_IOS) && !defined(Q_OS_IOS_APP_EXTENSION)
+extern void shareFileOnIOS(const QString &filePath);
 #endif
 
 #endif // LOGHANDLER_H

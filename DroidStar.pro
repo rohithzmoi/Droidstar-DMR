@@ -9,14 +9,19 @@ win32:QMAKE_LFLAGS += -static
 QMAKE_LFLAGS_WINDOWS += --enable-stdcall-fixup
 RC_ICONS = images/droidstar.ico
 ICON = images/droidstar.icns
-macx:LIBS += -framework AVFoundation
+macx:LIBS += -framework AVFoundation -framework Accelerate -framework Metal -framework MetalKit
+macx:DEFINES += GGML_USE_ACCELERATE GGML_USE_METAL
 macx:QMAKE_MACOSX_DEPLOYMENT_TARGET = 12.0
 macx:QMAKE_INFO_PLIST = Info.plist.mac
-ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit -framework MobileCoreServices -framework MediaPlayer -lz
+ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit -framework MobileCoreServices -framework MediaPlayer -framework Accelerate -framework Metal -framework MetalKit -framework UserNotifications -framework Speech -framework CoreML -lz
+ios:IPHONESIMULATOR_ARCHS = x86_64 arm64
+ios:CONFIG(iphonesimulator, iphoneos|iphonesimulator):LIBS += -L$$PWD/third_party/sherpa-onnx/lib/ios-simulator -lsherpa-onnx -lonnxruntime
+ios:CONFIG(iphoneos, iphoneos|iphonesimulator):LIBS += -L$$PWD/third_party/sherpa-onnx/lib/ios-arm64 -lsherpa-onnx -lonnxruntime
+ios:DEFINES += GGML_USE_ACCELERATE GGML_USE_METAL
 ios:QMAKE_IOS_DEPLOYMENT_TARGET=14.0
 ios:QMAKE_TARGET_BUNDLE_PREFIX = org.dudetronics
 ios:QMAKE_BUNDLE = droidstar
-ios:VERSION = 0.44.16
+ios:VERSION = 0.44.37
 ios:Q_ENABLE_BITCODE.name = ENABLE_BITCODE
 ios:Q_ENABLE_BITCODE.value = NO
 ios:QMAKE_MAC_XCODE_SETTINGS += Q_ENABLE_BITCODE
@@ -41,6 +46,7 @@ SOURCES += \
         SHA256.cpp \
         YSFConvolution.cpp \
         YSFFICH.cpp \
+        AudioEnhancer.cpp \
         audioengine.cpp \
         cbptc19696.cpp \
         cgolay2087.cpp \
@@ -82,7 +88,14 @@ SOURCES += \
         ref.cpp \
         xrf.cpp \
         ysf.cpp \
-        LiveActivityQtBridge.cpp
+        LiveActivityQtBridge.cpp \
+        TranscriptionEngine.cpp \
+        NetReminderManager.cpp \
+        third_party/whisper/whisper.cpp \
+        third_party/whisper/ggml.c \
+        third_party/whisper/ggml-alloc.c \
+        third_party/whisper/ggml-backend.c \
+        third_party/whisper/ggml-quants.c
 # Android-specific source files
 android:SOURCES += androidserialport.cpp
 
@@ -90,17 +103,13 @@ android:SOURCES += androidserialport.cpp
 !ios:SOURCES += serialambe.cpp serialmodem.cpp
 
 # Objective-C source files for macOS and iOS
-macx:OBJECTIVE_SOURCES += micpermission.mm
+macx:OBJECTIVE_SOURCES += micpermission.mm ios_notifications.mm third_party/whisper/ggml-metal.m
 ios:OBJECTIVE_SOURCES += micpermission.mm AudioSessionManager.mm
-ios:OBJECTIVE_SOURCES += ios_live_activity.mm
-
-# Enable background audio mode for iOS
-ios:QMAKE_MAC_XCODE_SETTINGS += QMAKE_IOS_BACKGROUND_MODES = YES
-ios:QMAKE_INFO_PLIST_EXTRA += "<key>UIBackgroundModes</key>"
-ios:QMAKE_INFO_PLIST_EXTRA += "<array>"
-ios:QMAKE_INFO_PLIST_EXTRA += "    <string>audio</string>"
-ios:QMAKE_INFO_PLIST_EXTRA += "</array>"
+ios:OBJECTIVE_SOURCES += ios_live_activity.mm ios_notifications.mm ios_speech_recognizer.mm third_party/whisper/ggml-metal.m
+ios:CONFIG += no_autoqmake
 ios:QMAKE_CXXFLAGS += -fobjc-arc
+ios:QMAKE_CXXFLAGS += -Wno-unnecessary-virtual-specifier
+ios:QMAKE_CFLAGS += -Wno-unnecessary-virtual-specifier
 
 # Live Activities / Dynamic Island require Swift compilation on iOS.
 # We include LiveActivityManager.swift here so it is ALWAYS part of the generated Xcode target
@@ -113,11 +122,15 @@ ios:QMAKE_CXXFLAGS += -fobjc-arc
 ios:SOURCES += LiveActivityManager.swift
 ios:SOURCES += DroidStarActivityAttributes.swift
 
-# Xcode Swift build settings (use KEY=VALUE to avoid qmake tokenization issues)
-ios:QMAKE_MAC_XCODE_SETTINGS += SWIFT_VERSION=5.0
-ios:QMAKE_MAC_XCODE_SETTINGS += CLANG_ENABLE_MODULES=YES
-ios:QMAKE_MAC_XCODE_SETTINGS += ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES=YES
-ios:QMAKE_MAC_XCODE_SETTINGS += EMBEDDED_CONTENT_CONTAINS_SWIFT=YES
+# Xcode Swift build settings (qmake needs .name/.value objects; "KEY=VALUE" strings
+# generate an empty SWIFT_VERSION and break the build after every qmake run)
+ios:Q_SWIFT_VERSION.name = SWIFT_VERSION
+ios:Q_SWIFT_VERSION.value = 5.0
+ios:Q_CLANG_ENABLE_MODULES.name = CLANG_ENABLE_MODULES
+ios:Q_CLANG_ENABLE_MODULES.value = YES
+ios:Q_EMBED_SWIFT_STDLIB.name = ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES
+ios:Q_EMBED_SWIFT_STDLIB.value = YES
+ios:QMAKE_MAC_XCODE_SETTINGS += Q_SWIFT_VERSION Q_CLANG_ENABLE_MODULES Q_EMBED_SWIFT_STDLIB
 
 
                          
@@ -126,6 +139,8 @@ ios:QMAKE_MAC_XCODE_SETTINGS += EMBEDDED_CONTENT_CONTAINS_SWIFT=YES
 resources.files = main.qml AboutTab.qml HostsTab.qml LogTab.qml MainTab.qml SettingsTab.qml fontawesome-webfont.ttf QsoTab.qml \
                   qtquickcontrols2.conf \
                   images/droidstar.png \
+                  images/droidstar_logo.png \
+                  images/droidstar_logo_white.png \
                   qml/AppShell.qml \
                   qml/theme/Theme.qml \
                   qml/components/AppCard.qml \
@@ -135,12 +150,27 @@ resources.files = main.qml AboutTab.qml HostsTab.qml LogTab.qml MainTab.qml Sett
                   ui2026/components/AppCard.qml \
                   ui2026/components/DrawerItem.qml \
                   ui2026/components/CollapsibleSection.qml \
+                  ui2026/components/SearchableComboSheet.qml \
+                  ui2026/components/AppTextField.qml \
+                  ui2026/components/FormField.qml \
+                  ui2026/components/ToggleRow.qml \
+                  ui2026/components/ChipToggle.qml \
+                  ui2026/components/SegmentedControl.qml \
+                  ui2026/components/AppButton.qml \
+                  ui2026/components/HeaderAction.qml \
+                  ui2026/components/Toast.qml \
+                  ui2026/components/DonateButtons.qml \
+                  ui2026/components/TxButton.qml \
                   ui2026/pages/MainPage.qml \
+                  ui2026/pages/ScanPage.qml \
                   ui2026/pages/SettingsPage.qml \
                   ui2026/pages/QsoPage.qml \
+                  ui2026/pages/NetsPage.qml \
                   ui2026/pages/LogPage.qml \
                   ui2026/pages/HostsPage.qml \
-                  ui2026/pages/AboutPage.qml
+                  ui2026/pages/AboutPage.qml \
+                  third_party/whisper/ggml-metal.metal \
+                  third_party/sherpa-onnx/models/gtcrn_simple.onnx
 resources.prefix = /$${TARGET}
 RESOURCES += resources
 
@@ -168,6 +198,7 @@ HEADERS += \
 	SHA256.h \
 	YSFConvolution.h \
 	YSFFICH.h \
+	AudioEnhancer.h \
 	audioengine.h \
 	cbptc19696.h \
 	cgolay2087.h \
@@ -216,7 +247,19 @@ HEADERS += \
 	xrf.h \
 	ysf.h \
         LiveActivityQtBridge.h \
-        ios_live_activity.h
+        ios_live_activity.h \
+        TranscriptionEngine.h \
+        NetReminderManager.h \
+        ios_notifications.h \
+        ios_speech_recognizer.h \
+        third_party/whisper/whisper.h \
+        third_party/whisper/ggml.h \
+        third_party/whisper/ggml-alloc.h \
+        third_party/whisper/ggml-backend.h \
+        third_party/whisper/ggml-backend-impl.h \
+        third_party/whisper/ggml-impl.h \
+        third_party/whisper/ggml-quants.h \
+        third_party/whisper/ggml-metal.h
 
 !contains(DEFINES, USE_EXTERNAL_CODEC2){
 HEADERS += \

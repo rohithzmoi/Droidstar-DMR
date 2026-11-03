@@ -74,12 +74,66 @@ Mode* Mode::create_mode(QString m)
     return mode;
 }
 
-Mode::Mode()
+Mode::Mode() :
+    m_dmrid(0),
+    m_nxdnid(0),
+    m_tx(false),
+    m_txcnt(0),
+    m_ttscnt(0),
+    m_ttsid(0),
+    m_debug(false)
 {
 }
 
 Mode::~Mode()
 {
+    if (m_txtimer) {
+        m_txtimer->stop();
+        delete m_txtimer;
+        m_txtimer = nullptr;
+    }
+    if (m_rxtimer) {
+        m_rxtimer->stop();
+        delete m_rxtimer;
+        m_rxtimer = nullptr;
+    }
+    if (m_ping_timer) {
+        m_ping_timer->stop();
+        delete m_ping_timer;
+        m_ping_timer = nullptr;
+    }
+    if (m_audio) {
+        m_audio->stop_capture();
+        m_audio->stop_playback();
+        delete m_audio;
+        m_audio = nullptr;
+    }
+    if (m_mbevocoder) {
+        delete m_mbevocoder;
+        m_mbevocoder = nullptr;
+    }
+    if (m_modeinfo.status == CONNECTED_RW || m_modeinfo.status == DMR_AUTH || m_modeinfo.status == DMR_CONF) {
+        if (m_udp) {
+            send_disconnect();
+        }
+        m_modeinfo.status = DISCONNECTED;
+    }
+    if (m_udp) {
+        m_udp->disconnect();
+        m_udp->close();
+        delete m_udp;
+        m_udp = nullptr;
+    }
+#if !defined(Q_OS_IOS)
+    if (m_ambedev) {
+        delete m_ambedev;
+        m_ambedev = nullptr;
+    }
+    if (m_modem) {
+        delete m_modem;
+        m_modem = nullptr;
+    }
+#endif
 }
 
 void Mode::init(QString callsign, uint32_t dmrid, uint16_t nxdnid, char module, QString refname, QString host, int port, bool ipv6, QString vocoder, QString modem, QString audioin, QString audioout, bool mdirect)
@@ -98,10 +152,15 @@ void Mode::init(QString callsign, uint32_t dmrid, uint16_t nxdnid, char module, 
     m_modem = nullptr;
     m_ambedev = nullptr;
     m_mbevocoder = nullptr;
+    m_audio = nullptr;
+    m_ping_timer = nullptr;
+    m_txtimer = nullptr;
+    m_rxtimer = nullptr;
     m_hwrx = false;
     m_hwtx = false;
     m_tx = false;
     m_ttsid = 0;
+    m_watchdog = 0;
     m_rxwatchdog = 0;
 
     m_modeinfo.callsign = callsign;
@@ -169,17 +228,26 @@ void Mode::mmdvm_connect_status(bool s)
 
 void Mode::in_audio_vol_changed(qreal v)
 {
-    m_audio->set_input_volume(v / m_attenuation);
+    m_pendingInVol = v;
+    if (m_audio) {
+        m_audio->set_input_volume(v / m_attenuation);
+    }
 }
 
 void Mode::out_audio_vol_changed(qreal v)
 {
-    m_audio->set_output_volume(v);
+    m_pendingOutVol = v;
+    if (m_audio) {
+        m_audio->set_output_volume(v);
+    }
 }
 
 void Mode::agc_state_changed(int s)
 {
-    m_audio->set_agc(s);
+    m_pendingAgc = (s != 0);
+    if (m_audio) {
+        m_audio->set_agc(m_pendingAgc);
+    }
 }
 
 void Mode::begin_connect()
@@ -244,16 +312,25 @@ void Mode::toggle_tx(bool tx)
 
 void Mode::start_tx()
 {
+    if (!m_txtimer || !m_audio) {
+        return;
+    }
 #if !defined(Q_OS_IOS)
-    if(m_hwtx){
+    if(m_hwtx && m_ambedev){
         m_ambedev->clear_queue();
     }
 #endif
     m_txcodecq.clear();
+    vocoder.reset_tx();
+    if (m_mbevocoder) {
+        m_mbevocoder->resetTx();
+    }
     m_tx = true;
     m_txcnt = 0;
     m_ttscnt = 0;
-    m_rxtimer->stop();
+    if (m_rxtimer) {
+        m_rxtimer->stop();
+    }
     m_modeinfo.streamid = 0;
     m_modeinfo.stream_state = TRANSMITTING;
 #ifdef USE_FLITE
@@ -269,7 +346,7 @@ void Mode::start_tx()
     }
 #endif
     if(!m_txtimer->isActive()){
-        if(m_ttsid == 0){
+        if(m_ttsid == 0 && !m_autoTxPunch.load(std::memory_order_relaxed)){
             m_audio->set_input_buffer_size(640);
             m_audio->start_capture();
             //audioin->start(&audio_buffer);
@@ -339,6 +416,7 @@ bool Mode::load_vocoder_plugin()
 #endif
 #else
     qDebug() << "new vocoder";
+    delete m_mbevocoder;
     m_mbevocoder = new VocoderPlugin();
     return true;
 #endif
@@ -346,21 +424,45 @@ bool Mode::load_vocoder_plugin()
 
 void Mode::deleteLater()
 {
-    if(m_modeinfo.status == CONNECTED_RW){
-        //m_udp->disconnect();
-        //m_ping_timer->stop();
-        send_disconnect();
-        delete m_audio;
-        //if(m_mbevocoder != nullptr) delete m_mbevocoder;
-#if !defined(Q_OS_IOS)
-        if(m_hwtx){
-            delete m_ambedev;
-        }
-        if(m_modem){
-            delete m_modem;
-        }
-#endif
+    if (m_txtimer) {
+        m_txtimer->stop();
     }
+    if (m_rxtimer) {
+        m_rxtimer->stop();
+    }
+    if (m_ping_timer) {
+        m_ping_timer->stop();
+    }
+    if (m_modeinfo.status == CONNECTED_RW || m_modeinfo.status == DMR_AUTH || m_modeinfo.status == DMR_CONF) {
+        if (m_udp) {
+            send_disconnect();
+        }
+        m_modeinfo.status = DISCONNECTED;
+    }
+    if (m_udp) {
+        m_udp->disconnect();
+        m_udp->close();
+    }
+    if (m_audio) {
+        m_audio->stop_capture();
+        m_audio->stop_playback();
+        delete m_audio;
+        m_audio = nullptr;
+    }
+    if (m_mbevocoder) {
+        delete m_mbevocoder;
+        m_mbevocoder = nullptr;
+    }
+#if !defined(Q_OS_IOS)
+    if (m_ambedev) {
+        delete m_ambedev;
+        m_ambedev = nullptr;
+    }
+    if (m_modem) {
+        delete m_modem;
+        m_modem = nullptr;
+    }
+#endif
     m_modeinfo.count = 0;
     QObject::deleteLater();
 }

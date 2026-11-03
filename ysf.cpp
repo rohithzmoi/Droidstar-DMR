@@ -140,23 +140,28 @@ void YSF::process_udp()
 	if(((buf.size() == 14) && (m_refname.left(3) != "FCS")) || ((buf.size() == 7) && (m_refname.left(3) == "FCS"))){
 		if(m_modeinfo.status == CONNECTING){
 			m_modeinfo.status = CONNECTED_RW;
-			m_txtimer = new QTimer();
+			m_txtimer = new QTimer(this);
+			m_txtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-			m_ping_timer = new QTimer();
+			m_ping_timer = new QTimer(this);
 			connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 			set_fcs_mode(false);
 			//m_mbeenc->set_gain_adjust(2.5);
 			m_modeinfo.sw_vocoder_loaded = load_vocoder_plugin();
 
-			m_rxtimer = new QTimer();
+			m_rxtimer = new QTimer(this);
+			m_rxtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
 
 			m_audio = new AudioEngine(m_audioin, m_audioout);
 			m_audio->init();
+			m_audio->set_agc(m_pendingAgc);
+			m_audio->set_input_volume(m_pendingInVol / m_attenuation);
+			m_audio->set_output_volume(m_pendingOutVol);
 
 			if(m_refname.left(3) == "FCS"){
 				char info[100U];
-				::sprintf(info, "%9u%9u%-6.6s%-12.12s%7u", 438000000, 438000000, "AA00AA", "MMDVM", 1234567);
+				::snprintf(info, sizeof(info), "%9u%9u%-6.6s%-12.12s%7u", 438000000, 438000000, "AA00AA", "MMDVM", 1234567);
 				::memset(info + 43U, ' ', 57U);
 				out.append(info, 100);
 				m_udp->writeDatagram(out, m_address, m_modeinfo.port);
@@ -380,8 +385,6 @@ void YSF::decode_header(uint8_t* data)
 
 	data += YSF_SYNC_LENGTH_BYTES + YSF_FICH_LENGTH_BYTES;
 
-	uint8_t* source = NULL;
-	uint8_t* dest = NULL;
 	uint8_t dch[45U];
 
 	uint8_t* p1 = data;
@@ -412,19 +415,9 @@ void YSF::decode_header(uint8_t* data)
 		for (uint32_t i = 0U; i < 20U; i++)
 			output[i] ^= WHITENING_DATA[i];
 
-		if (dest == NULL) {
-			dest = new uint8_t[YSF_CALLSIGN_LENGTH];
-			::memcpy(dest, output + 0U, YSF_CALLSIGN_LENGTH);
-		}
-
-		if (source == NULL) {
-			source = new uint8_t[YSF_CALLSIGN_LENGTH];
-			::memcpy(source, output + YSF_CALLSIGN_LENGTH, YSF_CALLSIGN_LENGTH);
-		}
-
-		m_modeinfo.src = QString::fromUtf8((const char *)source);
-		m_modeinfo.dst = QString::fromUtf8((const char *)dest);
-		m_modeinfo.gw2 = QString::fromUtf8((const char *)dest);
+		m_modeinfo.dst = QString::fromUtf8(reinterpret_cast<const char *>(output + 0U), YSF_CALLSIGN_LENGTH);
+		m_modeinfo.gw2 = m_modeinfo.dst;
+		m_modeinfo.src = QString::fromUtf8(reinterpret_cast<const char *>(output + YSF_CALLSIGN_LENGTH), YSF_CALLSIGN_LENGTH);
 	}
 }
 
@@ -563,13 +556,15 @@ void YSF::decode_vd2(uint8_t* data, uint8_t *dt)
 void YSF::decode_dn(uint8_t* data)
 {
 	uint8_t v_tmp[7U];
-	uint8_t dt[20];
+	uint8_t dt[21];
 	::memset(v_tmp, 0, 7U);
+	::memset(dt, 0, sizeof(dt));
 
 	data += YSF_SYNC_LENGTH_BYTES + YSF_FICH_LENGTH_BYTES;
 	switch(m_modeinfo.type){
 	case 0:
 		decode_vd1(data, dt);
+		dt[20] = 0x00;
 		break;
 	case 2:
 		decode_vd2(data, dt);
@@ -721,6 +716,10 @@ void YSF::transmit()
 	uint8_t s = 7;
 
 	memset(ambe, 0, 7);
+	if (!m_tx) {
+		send_frame();
+		return;
+	}
 #ifdef USE_FLITE
 	if(m_ttsid > 0){
 		for(int i = 0; i < 160; ++i){

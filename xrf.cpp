@@ -24,7 +24,7 @@
 XRF::XRF()
 {
     m_mode = "XRF";
-	m_attenuation = 5;
+	m_attenuation = 1;
 }
 
 XRF::~XRF()
@@ -63,15 +63,20 @@ void XRF::process_udp()
 	if( (m_modeinfo.status == CONNECTING) && (buf.size() == 14) && (!memcmp(buf.data()+10, "ACK", 3)) ){
 		m_modeinfo.status = CONNECTED_RW;
 		m_modeinfo.sw_vocoder_loaded = load_vocoder_plugin();
-		m_rxtimer = new QTimer();
+		m_rxtimer = new QTimer(this);
+		m_rxtimer->setTimerType(Qt::PreciseTimer);
 		connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
-		m_txtimer = new QTimer();
+		m_txtimer = new QTimer(this);
+		m_txtimer->setTimerType(Qt::PreciseTimer);
 		connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-		m_ping_timer = new QTimer();
+		m_ping_timer = new QTimer(this);
 		connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 		m_ping_timer->start(3000);
 		m_audio = new AudioEngine(m_audioin, m_audioout);
 		m_audio->init();
+		m_audio->set_agc(m_pendingAgc);
+		m_audio->set_input_volume(m_pendingInVol / m_attenuation);
+		m_audio->set_output_volume(m_pendingOutVol);
 	}
 
 	if((buf.size() == 56) && (!memcmp(buf.data(), "DSVT", 4)) ){
@@ -362,6 +367,10 @@ void XRF::transmit()
 	int16_t pcm[160];
 	memset(ambe_frame, 0, 72);
 	memset(ambe, 0, 9);
+	if (!m_tx) {
+		send_frame(ambe);
+		return;
+	}
 	
 #ifdef USE_FLITE
 	if(m_ttsid > 0){

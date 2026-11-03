@@ -43,10 +43,12 @@ const uint8_t REC80[] = {0x80U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
 #define WRITE_BIT(p,i,b) p[(i)>>3] = (b) ? (p[(i)>>3] | BIT_MASK_TABLE[(i)&7]) : (p[(i)>>3] & ~BIT_MASK_TABLE[(i)&7])
 #define READ_BIT(p,i)    (p[(i)>>3] & BIT_MASK_TABLE[(i)&7])
 
-P25::P25()
+P25::P25() :
+	m_p25cnt(0),
+	m_dstid(0),
+	m_txdstid(0)
 {
     m_mode = "P25";
-	m_p25cnt = 0;
 	m_txtimerint = 19;
 	m_attenuation = 2;
 }
@@ -76,17 +78,21 @@ void P25::process_udp()
 	if(buf.size() == 11){
 		if(m_modeinfo.status == CONNECTING){
 			m_modeinfo.status = CONNECTED_RW;
-			m_modeinfo.status = CONNECTED_RW;
-			m_dstid = m_refname.toInt();
-			m_txtimer = new QTimer();
-			m_rxtimer = new QTimer();
+			m_dstid = (m_txdstid > 0U) ? static_cast<int>(m_txdstid) : m_refname.toInt();
+			m_txtimer = new QTimer(this);
+			m_txtimer->setTimerType(Qt::PreciseTimer);
+			m_rxtimer = new QTimer(this);
+			m_rxtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
 			connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-			m_ping_timer = new QTimer();
+			m_ping_timer = new QTimer(this);
 			connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 			m_ping_timer->start(5000);
 			m_audio = new AudioEngine(m_audioin, m_audioout);
 			m_audio->init();
+			m_audio->set_agc(m_pendingAgc);
+			m_audio->set_input_volume(m_pendingInVol / m_attenuation);
+			m_audio->set_output_volume(m_pendingOutVol);
 			m_modeinfo.sw_vocoder_loaded = true;
 		}
 		if((m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) ){
@@ -245,6 +251,24 @@ void P25::transmit()
 	int16_t pcm[160];
 	uint8_t buffer[22];
 	static uint8_t p25step = 0;
+	memset(imbe, 0, sizeof(imbe));
+	if (!m_tx) {
+		txdata.append((char *)REC80, 17U);
+		m_udp->writeDatagram(txdata, m_address, m_modeinfo.port);
+		m_txtimer->stop();
+		if(m_ttsid == 0 && m_audio){
+			m_audio->stop_capture();
+		}
+		p25step = 0;
+		m_modeinfo.stream_state = STREAM_IDLE;
+		m_modeinfo.srcid = 0;
+		m_modeinfo.dstid = 0;
+		m_modeinfo.frame_number = 0;
+		m_txcodecq.clear();
+		emit update_output_level(0);
+		emit update(m_modeinfo);
+		return;
+	}
 #ifdef USE_FLITE
 	if(m_ttsid > 0){
 		for(int i = 0; i < 160; ++i){

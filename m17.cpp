@@ -97,6 +97,15 @@ M17::M17() :
 
 M17::~M17()
 {
+#ifdef USE_EXTERNAL_CODEC2
+	if (m_c2) {
+		codec2_destroy(m_c2);
+		m_c2 = NULL;
+	}
+#else
+	delete m_c2;
+	m_c2 = NULL;
+#endif
 }
 
 void M17::encode_callsign(uint8_t *callsign)
@@ -106,7 +115,7 @@ void M17::encode_callsign(uint8_t *callsign)
 	memset(cs, 0, sizeof(cs));
 	memcpy(cs, callsign, strlen((char *)callsign));
 	uint64_t encoded = 0;
-	for(int i = std::strlen((char *)callsign)-1; i >= 0; i--) {
+	for(int i = static_cast<int>(std::strlen((char *)callsign)) - 1; i >= 0; i--) {
 		auto pos = m17_alphabet.find(cs[i]);
 		if (pos == std::string::npos) {
 			pos = 0;
@@ -226,15 +235,20 @@ void M17::process_udp()
 #ifndef USE_EXTERNAL_CODEC2
 			m_c2 = new CCodec2(true);
 #endif
-			m_txtimer = new QTimer();
+			m_txtimer = new QTimer(this);
+			m_txtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-			m_rxtimer = new QTimer();
+			m_rxtimer = new QTimer(this);
+			m_rxtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
-			m_ping_timer = new QTimer();
+			m_ping_timer = new QTimer(this);
 			connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 			m_ping_timer->start(8000);
 			m_audio = new AudioEngine(m_audioin, m_audioout);
 			m_audio->init();
+			m_audio->set_agc(m_pendingAgc);
+			m_audio->set_input_volume(m_pendingInVol);
+			m_audio->set_output_volume(m_pendingOutVol);
 			m_modeinfo.sw_vocoder_loaded = true;
 		}
 		emit update(m_modeinfo);
@@ -372,6 +386,9 @@ void M17::mmdvm_direct_connect()
 	connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
 	m_audio = new AudioEngine(m_audioin, m_audioout);
 	m_audio->init();
+	m_audio->set_agc(m_pendingAgc);
+	m_audio->set_input_volume(m_pendingInVol);
+	m_audio->set_output_volume(m_pendingOutVol);
 	emit update(m_modeinfo);
 }
 
@@ -730,9 +747,10 @@ void M17::transmit()
 	static uint16_t tx_cnt = 0;
 	int16_t pcm[320];
 	uint8_t c2[16];
+	memset(c2, 0, sizeof(c2));
 #ifdef USE_FLITE
 	static uint16_t ttscnt = 0;
-	if(m_ttsid > 0){
+	if(m_tx && m_ttsid > 0){
 		for(int i = 0; i < 320; ++i){
 			if(ttscnt >= tts_audio->num_samples/2){
 				//audiotx_cnt = 0;
@@ -751,7 +769,7 @@ void M17::transmit()
 		}
 	}
 #endif
-	if(m_ttsid == 0){
+	if(m_tx && m_ttsid == 0){
 		if(m_audio->read(pcm, 320)){
 			encode_c2(pcm, c2);
 			if(get_mode()){

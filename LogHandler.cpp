@@ -9,6 +9,8 @@
 #include <QDesktopServices>
 #include <QtConcurrent> // Include for running asynchronous tasks
 #include <QMetaObject>
+#include <QSaveFile>
+#include <QMutexLocker>
 
 LogHandler::LogHandler(QObject *parent) : QObject(parent)
 {
@@ -27,13 +29,16 @@ QString LogHandler::getFilePath(const QString &fileName) const
     }
 
     QString filePath = dirPath + "/" + fileName;
-    qDebug() << "Log file path:" << filePath;
     return filePath;
 }
 
 void LogHandler::saveLogAsync(const QString &fileName, const QJsonArray &logData)
 {
-    QtConcurrent::run([this, fileName, logData]() {
+    {
+        QMutexLocker locker(&m_mutex);
+        m_cache.insert(fileName, logData);
+    }
+    (void)QtConcurrent::run([this, fileName, logData]() {
         const bool ok = saveLog(fileName, logData);
         // Ensure QML observers run on the UI thread
         QMetaObject::invokeMethod(this, [this, fileName, ok]() {
@@ -44,7 +49,7 @@ void LogHandler::saveLogAsync(const QString &fileName, const QJsonArray &logData
 
 void LogHandler::loadLogAsync(const QString &fileName, std::function<void(QJsonArray)> callback)
 {
-    QtConcurrent::run([this, fileName, callback]() {
+    (void)QtConcurrent::run([this, fileName, callback]() {
         QJsonArray logData = loadLog(fileName);
         callback(logData);
     });
@@ -52,32 +57,43 @@ void LogHandler::loadLogAsync(const QString &fileName, std::function<void(QJsonA
 
 bool LogHandler::saveLog(const QString &fileName, const QJsonArray &logData)
 {
+    QMutexLocker locker(&m_mutex);
+    m_cache.insert(fileName, logData);
     QString filePath = getFilePath(fileName);
     if (filePath.isEmpty()) {
         return false;
     }
 
-    QFile file(filePath);
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly)) {
-        qDebug() << "Failed to open file for writing:" << file.errorString();
+        qDebug() << "Failed to open file for atomic writing:" << file.errorString();
         return false;
     }
 
     QJsonDocument doc(logData);
-    file.write(doc.toJson());
-    file.close();
-    qDebug() << "Log saved successfully.";
+    file.write(doc.toJson(QJsonDocument::Compact));
+    if (!file.commit()) {
+        qDebug() << "Failed to commit log file:" << file.errorString();
+        return false;
+    }
     return true;
 }
 
 QJsonArray LogHandler::loadLog(const QString &fileName)
 {
+    QMutexLocker locker(&m_mutex);
+    auto cachedIt = m_cache.constFind(fileName);
+    if (cachedIt != m_cache.cend()) {
+        return cachedIt.value();
+    }
+
     QString filePath = getFilePath(fileName);
     QJsonArray logData;
 
     QFile file(filePath);
     // If the log doesn't exist yet, treat as empty without logging an error.
     if (!file.exists()) {
+        m_cache.insert(fileName, logData);
         return logData;
     }
     if (!file.open(QIODevice::ReadOnly)) {
@@ -86,32 +102,44 @@ QJsonArray LogHandler::loadLog(const QString &fileName)
     }
 
     QByteArray data = file.readAll();
+    file.close();
+    if (data.trimmed().isEmpty()) {
+        m_cache.insert(fileName, logData);
+        return logData;
+    }
+
     QJsonDocument doc(QJsonDocument::fromJson(data));
     if (!doc.isNull() && doc.isArray()) {
         logData = doc.array();
-        qDebug() << "Log loaded successfully.";
     } else {
         qDebug() << "Failed to parse JSON log.";
     }
 
-    file.close();
+    m_cache.insert(fileName, logData);
     return logData;
 }
 
 bool LogHandler::clearLog(const QString &fileName)
 {
-    QString filePath = getFilePath(fileName);
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.close();
-        qDebug() << "Log cleared successfully.";
-        QMetaObject::invokeMethod(this, [this, fileName]() {
-            emit logCleared(fileName);
-        }, Qt::QueuedConnection);
-        return true;
+    {
+        QMutexLocker locker(&m_mutex);
+        m_cache.insert(fileName, QJsonArray());
+        QString filePath = getFilePath(fileName);
+        QSaveFile file(filePath);
+        if (!file.open(QIODevice::WriteOnly)) {
+            qDebug() << "Failed to clear log:" << file.errorString();
+            return false;
+        }
+        file.write("[]");
+        if (!file.commit()) {
+            qDebug() << "Failed to commit cleared log:" << file.errorString();
+            return false;
+        }
     }
-    qDebug() << "Failed to clear log:" << file.errorString();
-    return false;
+    QMetaObject::invokeMethod(this, [this, fileName]() {
+        emit logCleared(fileName);
+    }, Qt::QueuedConnection);
+    return true;
 }
 
 QString LogHandler::getDSLogPath() const
@@ -137,7 +165,43 @@ QString LogHandler::getDSLogPath() const
     return dsLogPath;
 }
 
-bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logData)
+static QString csvEscapeField(const QString &val)
+{
+    QString s = val;
+    s.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    s.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    s.replace(QLatin1Char('\n'), QStringLiteral(" | "));
+    return QStringLiteral("\"") + s + QStringLiteral("\"");
+}
+
+static QString formatEntryTimestampedTranscript(const QJsonObject &entry)
+{
+    const QJsonArray turns = entry[QStringLiteral("transcriptTurns")].toArray();
+    if (!turns.isEmpty()) {
+        QStringList parts;
+        for (const QJsonValue &v : turns) {
+            const QJsonObject t = v.toObject();
+            const QString timeStr = t[QStringLiteral("time")].toString().trimmed();
+            const QString textStr = t[QStringLiteral("text")].toString().trimmed();
+            if (textStr.isEmpty()) continue;
+            if (!timeStr.isEmpty()) {
+                parts.append(QStringLiteral("[%1] %2").arg(timeStr, textStr));
+            } else {
+                parts.append(textStr);
+            }
+        }
+        if (!parts.isEmpty()) {
+            return parts.join(QStringLiteral(" | "));
+        }
+    }
+
+    QString fallback = entry[QStringLiteral("transcript")].toString().trimmed();
+    fallback.replace(QLatin1Char('\r'), QLatin1Char(' '));
+    fallback.replace(QLatin1Char('\n'), QStringLiteral(" | "));
+    return fallback;
+}
+
+bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logData, bool includeTranscripts)
 {
     QString dsLogPath = getDSLogPath();
     if (dsLogPath.isEmpty()) {
@@ -157,17 +221,22 @@ bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logDa
 
     QTextStream out(&file);
 
-    out << "Sr.No,Callsign,DMR ID,TGID,Handle,Country,Time\n";
+    out << "Sr.No,Callsign,DMR ID,TGID,Handle,Country,Time";
+    out << (includeTranscripts ? ",Transcript\n" : "\n");
 
     for (int i = 0; i < logData.size(); ++i) {
         QJsonObject entry = logData[i].toObject();
         out << entry["serialNumber"].toInt() << ","
-            << entry["callsign"].toString() << ","
+            << csvEscapeField(entry["callsign"].toString()) << ","
             << entry["dmrID"].toInt() << ","
             << entry["tgid"].toInt() << ","
-            << entry["fname"].toString() << ","
-            << entry["country"].toString() << ","
-            << entry["currentTime"].toString() << "\n";
+            << csvEscapeField(entry["fname"].toString()) << ","
+            << csvEscapeField(entry["country"].toString()) << ","
+            << csvEscapeField(entry["currentTime"].toString());
+        if (includeTranscripts) {
+            out << "," << csvEscapeField(formatEntryTimestampedTranscript(entry));
+        }
+        out << "\n";
     }
 
     file.close();
@@ -176,7 +245,7 @@ bool LogHandler::exportLogToCsv(const QString &fileName, const QJsonArray &logDa
     return true;
 }
 
-bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logData)
+bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logData, bool includeTranscripts)
 {
     QString dsLogPath = getDSLogPath();
     if (dsLogPath.isEmpty()) {
@@ -207,13 +276,22 @@ bool LogHandler::exportLogToAdif(const QString &fileName, const QJsonArray &logD
         QString timeOn = currentTime.mid(11, 8).remove(':'); // Format: HHMMSS
 
         // Write each QSO record with valid ADIF tags
-        out << "<CALL:" << entry["callsign"].toString().length() << ">" << entry["callsign"].toString();
+        // ADIF field lengths count bytes of the UTF-8 output, not UTF-16 code units
+        const QString call = entry["callsign"].toString();
+        const QString name = entry["fname"].toString();
+        out << "<CALL:" << call.toUtf8().size() << ">" << call;
         out << "<BAND:4>70CM";  // Band is hardcoded as "70CM"
         out << "<MODE:12>DIGITALVOICE";    // Mode is set to "DIGITALVOICE"
-        out << "<NAME:" << entry["fname"].toString().length() << ">" << entry["fname"].toString();
+        out << "<NAME:" << name.toUtf8().size() << ">" << name;
 
         out << "<QSO_DATE:" << qsoDate.length() << ">" << qsoDate;
         out << "<TIME_ON:6>" << timeOn;
+        if (includeTranscripts) {
+            const QString transcript = formatEntryTimestampedTranscript(entry);
+            if (!transcript.isEmpty()) {
+                out << "<COMMENT:" << transcript.toUtf8().size() << ">" << transcript;
+            }
+        }
         out << "<EOR>\n";  // End of Record
     }
 
@@ -229,7 +307,7 @@ QString LogHandler::getFriendlyPath(const QString &fullPath) const {
 }
 
 void LogHandler::shareFile() {
-#ifdef Q_OS_IOS
+#if defined(Q_OS_IOS) && !defined(Q_OS_IOS_APP_EXTENSION)
     if (lastSavedFilePath.isEmpty()) {
         qDebug() << "No file has been saved to share.";
         return;
@@ -241,7 +319,6 @@ void LogHandler::shareFile() {
         return;
     }
 
-    // Use iOS-specific code to present the share sheet
     shareFileOnIOS(lastSavedFilePath);
 #else
     qDebug() << "Share functionality is only implemented for iOS.";

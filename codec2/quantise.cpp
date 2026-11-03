@@ -24,6 +24,11 @@
 
 */
 
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#endif
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdio.h>

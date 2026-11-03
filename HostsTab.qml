@@ -51,7 +51,9 @@ Page {
                            "<mode> <name> <host> <port> <username (optional)> <password (optional)>\n" +
                            "Example: REF REF123 192.168.1.1 20001\n" +
                            "Example: DMR MyNet 192.168.1.1 62030 passw0rd\n" +
-                           "Example: IAX 12345 192.168.1.1 4569 iaxclient iaxpass")
+                           "Example: IAX 12345 192.168.1.1 4569 iaxclient iaxpass\n" +
+                           "Example: IAX 12345 wt\n" +
+                           "Example: IAX 12345 wt 4571")
             }
 
             TextArea {

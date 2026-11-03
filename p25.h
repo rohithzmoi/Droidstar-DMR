@@ -39,7 +39,7 @@ private slots:
 	void send_disconnect();
 	void transmit();
 	void hostname_lookup(QHostInfo i);
-	void dmr_tgid_changed(uint32_t id) { m_txdstid = id; }
+	void dmr_tgid_changed(int id) { m_txdstid = (id > 0) ? static_cast<uint32_t>(id) : 0U; if (m_txdstid > 0U) m_dstid = static_cast<int>(m_txdstid); }
 };
 
 #endif // P25_H

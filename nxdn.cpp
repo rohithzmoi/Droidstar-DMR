@@ -77,16 +77,21 @@ void NXDN::process_udp()
 	if(buf.size() == 17){
 		if(m_modeinfo.status == CONNECTING){
 			m_modeinfo.status = CONNECTED_RW;
-			m_rxtimer = new QTimer();
+			m_rxtimer = new QTimer(this);
+			m_rxtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
-			m_txtimer = new QTimer();
+			m_txtimer = new QTimer(this);
+			m_txtimer->setTimerType(Qt::PreciseTimer);
 			connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-			m_ping_timer = new QTimer();
+			m_ping_timer = new QTimer(this);
 			connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 			//m_mbeenc->set_gain_adjust(2.5);
 			m_modeinfo.sw_vocoder_loaded = load_vocoder_plugin();
 			m_audio = new AudioEngine(m_audioin, m_audioout);
 			m_audio->init();
+			m_audio->set_agc(m_pendingAgc);
+			m_audio->set_input_volume(m_pendingInVol / m_attenuation);
+			m_audio->set_output_volume(m_pendingOutVol);
 			m_ping_timer->start(1000);
 		}
 		if( (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) ){
@@ -241,6 +246,10 @@ void NXDN::transmit()
 	int16_t pcm[160];
 
 	memset(ambe, 0, 7);
+	if (!m_tx) {
+		send_frame();
+		return;
+	}
 
 #ifdef USE_FLITE
 	if(m_ttsid > 0){
@@ -317,6 +326,9 @@ void NXDN::send_frame()
 	else{
 		fprintf(stderr, "NXDN TX stopped\n");
 		m_txtimer->stop();
+		if(m_ttsid == 0 && m_audio){
+			m_audio->stop_capture();
+		}
 		temp_nxdn = get_eot();
 		m_ttscnt = 0;
 		txdata.append((char *)temp_nxdn, 43);

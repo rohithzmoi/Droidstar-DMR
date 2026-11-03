@@ -46,13 +46,19 @@ Page {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: qsTr("DroidStar iOS build - V0.44.17.0 " +
+                text: qsTr("DroidStar iOS build - V" + droidstar.get_software_build() + " " +
                            "\nArchitecture:\t" + droidstar.get_arch() +
                            "\nBuild ABI:\t" + droidstar.get_build_abi() +
-                           "\n\nProject page: https://github.com/nostar/DroidStar" +
+                           "\n\nProject page: https://github.com/rohithzmoi/Droidstar-DMR" +
                            "\n\nOriginal Copyright (C) 2019-2021 Doug McLain AD8DP\n" +
                            "\n\nModification Copyright (C) 2024 Rohith Namboothiri VU3LVO\n" +
                            "\n\nThis customized iOS/Android version, built and distributed by VU3LVO, is specifically designed for use by a select group and is not intended for public use at the moment.")
+            }
+
+            Button {
+                Layout.fillWidth: true
+                text: qsTr("Visit Official Website")
+                onClicked: Qt.openUrlExternally("https://vu3lvo.com/droidstar")
             }
 
             RowLayout {

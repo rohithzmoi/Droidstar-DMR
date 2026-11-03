@@ -19,18 +19,21 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 
+import "../theme"
+
 Pane {
     id: root
     property int radius: 16
 
+    Tokens { id: t }
+
     padding: 16
-    Material.elevation: 1
+    Material.elevation: 0
 
     background: Rectangle {
-        color: Material.background
+        color: t.surface2
         radius: root.radius
-        border.color: "#233044"
+        border.color: t.stroke
         border.width: 1
     }
 }
-

@@ -23,7 +23,7 @@
 DCS::DCS()
 {
     m_mode = "DCS";
-	m_attenuation = 5;
+	m_attenuation = 1;
 }
 
 DCS::~DCS()
@@ -39,7 +39,7 @@ void DCS::process_udp()
 	static int sd_seq = 0;
 	static char user_data[21];
     buf.resize(200);
-    int size = m_udp->readDatagram(buf.data(), buf.size(), &sender, &senderPort);
+    const qint64 size = m_udp->readDatagram(buf.data(), buf.size(), &sender, &senderPort);
 
     if(m_debug){
         QDebug debug = qDebug();
@@ -63,15 +63,20 @@ void DCS::process_udp()
 		qDebug() << "Connected to DCS";
 		m_modeinfo.status = CONNECTED_RW;
 		m_modeinfo.sw_vocoder_loaded = load_vocoder_plugin();
-		m_rxtimer = new QTimer();
+		m_rxtimer = new QTimer(this);
+		m_rxtimer->setTimerType(Qt::PreciseTimer);
 		connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
-		m_txtimer = new QTimer();
+		m_txtimer = new QTimer(this);
+		m_txtimer->setTimerType(Qt::PreciseTimer);
 		connect(m_txtimer, SIGNAL(timeout()), this, SLOT(transmit()));
-		m_ping_timer = new QTimer();
+		m_ping_timer = new QTimer(this);
 		connect(m_ping_timer, SIGNAL(timeout()), this, SLOT(send_ping()));
 		m_ping_timer->start(2000);
 		m_audio = new AudioEngine(m_audioin, m_audioout);
 		m_audio->init();
+		m_audio->set_agc(m_pendingAgc);
+		m_audio->set_input_volume(m_pendingInVol / m_attenuation);
+		m_audio->set_output_volume(m_pendingOutVol);
 	}
 
 	if(m_modeinfo.status != CONNECTED_RW) return;
@@ -350,6 +355,10 @@ void DCS::transmit()
     uint8_t ambe[9];
 	int16_t pcm[160];
 	memset(ambe, 0, 9);
+	if (!m_tx) {
+		send_frame(ambe);
+		return;
+	}
 	
 #ifdef USE_FLITE
 	if(m_ttsid > 0){

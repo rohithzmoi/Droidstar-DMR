@@ -27,11 +27,16 @@ Item {
     property string title: ""
     // Optional status string shown in the header (e.g. "Connected")
     property string statusText: ""
+    property string statusIcon: ""
+    property color statusColor: t.accent
+    property color statusIconColor: root.statusColor
     // If true, show status only when collapsed (recommended for compact headers).
     property bool statusWhenCollapsedOnly: true
     property bool expanded: true
+    property int contentPadding: 12
     property alias contentItem: contentLoader.sourceComponent
     default property alias content: contentLoader.sourceComponent
+    readonly property Item loadedItem: contentLoader.item
 
     // Derive content height from the loaded item's implicit/explicit height.
     readonly property real contentHeight: contentLoader.item
@@ -39,16 +44,16 @@ Item {
                                                    contentLoader.item.height || 0)
                                         : 0
 
+    function toggle() { root.expanded = !root.expanded }
+
     Layout.fillWidth: true
-    implicitHeight: headerRow.height + (expanded ? root.contentHeight + 8 : 0)
+    implicitHeight: headerRow.height + body.height + 8
 
     Tokens { id: t }
 
-    Behavior on implicitHeight { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-
     Rectangle {
         anchors.fill: parent
-        radius: 16
+        radius: t.rMd
         color: t.surface2
         border.color: t.stroke
         border.width: 1
@@ -65,7 +70,13 @@ Item {
             width: parent.width
             height: 48
             radius: 14
-            color: headerMouse.containsMouse ? Qt.rgba(1,1,1,0.04) : "transparent"
+            color: headerMouse.pressed ? Qt.rgba(1, 1, 1, 0.07)
+                 : (headerMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.04) : "transparent")
+            Behavior on color { ColorAnimation { duration: t.durFast } }
+
+            Accessible.role: Accessible.Button
+            Accessible.name: root.title
+            Accessible.onPressAction: root.toggle()
 
             RowLayout {
                 anchors.fill: parent
@@ -77,43 +88,63 @@ Item {
                     text: root.title
                     font.bold: true
                     font.pixelSize: 15
+                    color: t.text
+                    elide: Text.ElideRight
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 60
                 }
 
                 Rectangle {
                     id: statusPill
                     visible: root.statusText !== "" && (!root.statusWhenCollapsedOnly || !root.expanded)
-                    radius: 999
-                    height: 26
-                    color: Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.12)
-                    border.color: Qt.rgba(t.accent.r, t.accent.g, t.accent.b, 0.45)
+                    radius: height / 2
+                    Layout.preferredHeight: 26
+                    color: t.tint(root.statusColor, 0.12)
+                    border.color: t.tint(root.statusColor, 0.45)
                     border.width: 1
                     clip: true
 
                     // Responsive: cap width so it never crushes the title.
-                    Layout.maximumWidth: Math.max(120, headerRow.width * 0.42)
-                    Layout.preferredWidth: Math.min(statusTextLabel.implicitWidth + 18, statusPill.Layout.maximumWidth)
+                    Layout.maximumWidth: Math.max(110, headerRow.width * 0.5)
+                    Layout.preferredWidth: Math.min(statusPillRow.implicitWidth + 18, statusPill.Layout.maximumWidth)
 
-                    Label {
-                        id: statusTextLabel
+                    RowLayout {
+                        id: statusPillRow
                         anchors.fill: parent
                         anchors.leftMargin: 9
                         anchors.rightMargin: 9
-                        text: root.statusText
-                        font.pixelSize: 12
-                        color: t.text
-                        opacity: 0.9
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
+                        spacing: 5
+
+                        Label {
+                            visible: root.statusIcon !== ""
+                            text: root.statusIcon
+                            font.family: "FontAwesome"
+                            font.pixelSize: 11
+                            color: root.statusIconColor
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+
+                        Label {
+                            id: statusTextLabel
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            text: root.statusText
+                            font.pixelSize: 12
+                            color: t.text
+                            opacity: 0.92
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
                     }
                 }
 
                 Label {
-                    text: root.expanded ? "\uf077" : "\uf078"
+                    text: "\uf078"
                     font.family: "FontAwesome"
                     font.pixelSize: 12
-                    opacity: 0.7
-                    Behavior on text { PropertyAnimation { duration: 120 } }
+                    color: t.textMuted
+                    rotation: root.expanded ? 180 : 0
+                    Behavior on rotation { NumberAnimation { duration: t.durMed; easing.type: Easing.OutCubic } }
                 }
             }
 
@@ -122,23 +153,26 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.expanded = !root.expanded
+                onClicked: root.toggle()
             }
         }
 
         // Content area (clipped when collapsed)
         Item {
+            id: body
             width: parent.width
-            height: root.expanded ? root.contentHeight : 0
+            height: root.expanded ? root.contentHeight + root.contentPadding : 0
             clip: true
             opacity: root.expanded ? 1 : 0
+            visible: height > 0
 
-            Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-            Behavior on opacity { NumberAnimation { duration: 140 } }
+            Behavior on height { NumberAnimation { duration: t.durMed; easing.type: Easing.OutCubic } }
+            Behavior on opacity { NumberAnimation { duration: t.durFast } }
 
             Loader {
                 id: contentLoader
-                width: parent.width - 24
+                y: 2
+                width: parent.width - root.contentPadding * 2
                 anchors.horizontalCenter: parent.horizontalCenter
                 active: true
             }

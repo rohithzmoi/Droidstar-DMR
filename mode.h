@@ -20,6 +20,7 @@
 
 #include <QObject>
 #include <QtNetwork>
+#include <atomic>
 #ifdef USE_FLITE
 #include <flite/flite.h>
 #endif
@@ -71,9 +72,11 @@ public:
         m_m17TXLevel = m17TXLevel;
     }
     virtual void set_dmr_params(uint8_t, QString, QString, QString, QString, QString, QString, QString, QString, QString, QString) {}
-    virtual void set_iax_params(QString, QString, QString, QString, int) {}
+    virtual void set_iax_params(QString, QString, QString, QString, QString, int) {}
     bool get_hwrx() { return m_hwrx; }
     bool get_hwtx() { return m_hwtx; }
+    void set_auto_tx_punch(bool on) { m_autoTxPunch.store(on, std::memory_order_relaxed); }
+    bool is_auto_tx_punch() const { return m_autoTxPunch.load(std::memory_order_relaxed); }
     void set_hostname(std::string);
     void set_callsign(std::string);
     struct MODEINFO {
@@ -113,6 +116,7 @@ public:
     } m_modeinfo;
     enum{
         DISCONNECTED,
+        TIMEOUT,
         CLOSED,
         CONNECTING,
         DMR_AUTH,
@@ -135,7 +139,7 @@ signals:
     void update(Mode::MODEINFO);
     void update_log(QString);
     void update_output_level(unsigned short);
-protected slots:
+public slots:
     virtual void send_disconnect(){}
     virtual void hostname_lookup(QHostInfo){}
     virtual void mmdvm_direct_connect(){}
@@ -168,6 +172,7 @@ protected:
     QUdpSocket *m_udp = nullptr;
     QHostAddress m_address;
     char m_module;
+    uint8_t m_watchdog = 0;
     uint32_t m_dmrid;
     uint16_t m_nxdnid;
     QString m_refname;
@@ -187,38 +192,42 @@ protected:
     cst_voice *voice_awb;
     cst_wave *tts_audio;
 #endif
-    QTimer *m_ping_timer;
-    QTimer *m_txtimer;
-    QTimer *m_rxtimer;
-    AudioEngine *m_audio;
+    QTimer *m_ping_timer = nullptr;
+    QTimer *m_txtimer = nullptr;
+    QTimer *m_rxtimer = nullptr;
+    AudioEngine *m_audio = nullptr;
     QString m_audioin;
     QString m_audioout;
-    bool m_mdirect;
-    uint32_t m_rxwatchdog;
-    uint8_t m_attenuation;
-    uint8_t m_rxtimerint;
-    uint8_t m_txtimerint;
+    bool m_mdirect = false;
+    uint32_t m_rxwatchdog = 0;
+    uint8_t m_attenuation = 1;
+    uint8_t m_rxtimerint = 20;
+    uint8_t m_txtimerint = 19;
+    qreal m_pendingInVol = 0.5;
+    qreal m_pendingOutVol = 1.0;
+    bool m_pendingAgc = true;
     QQueue<uint8_t> m_rxcodecq;
     QQueue<uint8_t> m_txcodecq;
     QQueue<uint8_t> m_rxmodemq;
     imbe_vocoder vocoder;
 #ifdef VOCODER_PLUGIN
-    Vocoder *m_mbevocoder;
+    Vocoder *m_mbevocoder = nullptr;
 #else
-    VocoderPlugin *m_mbevocoder;
+    VocoderPlugin *m_mbevocoder = nullptr;
 #endif
     QString m_vocoder;
     QString m_modemport;
 #if defined(Q_OS_IOS)
-    void *m_modem;
-    void *m_ambedev;
+    void *m_modem = nullptr;
+    void *m_ambedev = nullptr;
 #else
-    SerialModem *m_modem;
-    SerialAMBE *m_ambedev;
+    SerialModem *m_modem = nullptr;
+    SerialAMBE *m_ambedev = nullptr;
 #endif
-    bool m_hwrx;
-    bool m_hwtx;
-    bool m_ipv6;
+    bool m_hwrx = false;
+    bool m_hwtx = false;
+    bool m_ipv6 = false;
+    std::atomic<bool> m_autoTxPunch { false };
 
     uint32_t m_baud;
     uint32_t m_rxfreq;

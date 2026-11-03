@@ -26,6 +26,11 @@
   along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#endif
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -925,7 +930,7 @@ void CCodec2::phase_synth_zero_order(
 
 void CCodec2::postfilter( MODEL *model, float *bg_est )
 {
-	int   m, uv;
+	int   m;
 	float e, thresh;
 
 	/* determine average energy across spectrum */
@@ -948,14 +953,12 @@ void CCodec2::postfilter( MODEL *model, float *bg_est )
 	   less then our background estimate unvoiced.
 	*/
 
-	uv = 0;
 	thresh = exp10f((*bg_est + BG_MARGIN)/20.0);
 	if (model->voiced)
 		for(m=1; m<=model->L; m++)
 			if (model->A[m] < thresh)
 			{
 				model->phi[m] = (TWO_PI/CODEC2_RAND_MAX)*(float)codec2_rand();
-				uv++;
 			}
 }
 
