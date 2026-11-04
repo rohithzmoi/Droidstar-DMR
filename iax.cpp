@@ -818,8 +818,7 @@ void IAX::process_udp()
 				const uint8_t rIseq = static_cast<uint8_t>(buf.data()[9]);
 				send_ack(dstCallNo, peerCallNo, rIseq, rOseq + 1);
 				if (m_modeinfo.status == CONNECTING && !m_callSent) {
-					// AllStar / Asterisk stanzas with `type = user` (no `host = dynamic`) reject
-					// REGREQ while allowing NEW calls. Proceed with calltoken + send_call().
+					// AllStar / Asterisk stanzas with `type = user` (no `host = dynamic`) reject REGREQ
 					m_regAccepted = false;
 					m_regreq = false;
 					send_calltoken_request();
@@ -992,12 +991,18 @@ void IAX::process_rx_data()
 {
 	int16_t pcm[160];
 
-	if(m_audioq.size() > 160){
+	if(!m_rxAudioPrimed && m_audioq.size() >= 480){
+		m_rxAudioPrimed = true; // 3 frames (60 ms) buffered before the first dequeue
+	}
+	if(m_rxAudioPrimed && m_audioq.size() >= 160){
 		for(int i = 0; i < 160; ++i){
 			pcm[i] = (qreal)m_audioq.dequeue(); // * m_rxgain;
 		}
 		m_audio->write(pcm, 160);
 		emit update_output_level(m_audio->level());
+	}
+	else if(m_rxAudioPrimed && m_audioq.isEmpty()){
+		m_rxAudioPrimed = false; // underrun / end of talkspurt: rebuild the 60 ms cushion
 	}
 	else return;
 }

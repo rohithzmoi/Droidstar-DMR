@@ -18,6 +18,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 
 #include "mbevocoder.h"
@@ -78,67 +79,13 @@ mbe_dumpAmbe3600x2450Frame (char ambe_fr[4][24])
 int
 mbe_eccAmbe3600x2450C0 (char ambe_fr[4][24])
 {
-
-  int j, errs;
-  char in[23], out[23];
-
-  for (j = 0; j < 23; j++)
-    {
-      in[j] = ambe_fr[0][j + 1];
-    }
-  errs = mbe_golay2312 (in, out);
-  // ambe_fr[0][0] should be the C0 golay24 parity bit.
-  // TODO: actually test that here...
-  for (j = 0; j < 23; j++)
-    {
-      ambe_fr[0][j + 1] = out[j];
-    }
-
-  return (errs);
+  return mbe_eccAmbe3600C0Counted (ambe_fr);
 }
 
 int
 mbe_eccAmbe3600x2450Data (char ambe_fr[4][24], char *ambe_d)
 {
-
-  int j, errs;
-  char *ambe, gin[24], gout[24];
-
-  ambe = ambe_d;
-  // just copy C0
-  for (j = 23; j > 11; j--)
-    {
-      *ambe = ambe_fr[0][j];
-      ambe++;
-    }
-
-  // ecc and copy C1
-  for (j = 0; j < 23; j++)
-    {
-      gin[j] = ambe_fr[1][j];
-    }
-  errs = mbe_golay2312 (gin, gout);
-  for (j = 22; j > 10; j--)
-    {
-      *ambe = gout[j];
-      ambe++;
-    }
-
-  // just copy C2
-  for (j = 10; j >= 0; j--)
-    {
-      *ambe = ambe_fr[2][j];
-      ambe++;
-    }
-
-  // just copy C3
-  for (j = 13; j >= 0; j--)
-    {
-      *ambe = ambe_fr[3][j];
-      ambe++;
-    }
-
-  return (errs);
+  return mbe_eccAmbe3600DataCounted (ambe_fr, ambe_d);
 }
 
 int
@@ -154,6 +101,7 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   int Ji[5], jl;
   float deltaGamma, BigGamma;
   float unvc, rconst;
+  const struct ambe_dct_cache *dct_cache = mbe_get_dct_cache();
 
   silence = 0;
 
@@ -163,6 +111,13 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
 
   // copy repeat from prev_mp
   cur_mp->repeat = prev_mp->repeat;
+
+  // TIA-102.BABA-1 §7: a frame whose first six bits of u0 (ambe_d[0..5])
+  int u0_top6 = (ambe_d[0]<<5) | (ambe_d[1]<<4) | (ambe_d[2]<<3) | (ambe_d[3]<<2) | (ambe_d[4]<<1) | ambe_d[5];
+  if (u0_top6 == 0x3F)
+    {
+      return (3);
+    }
 
   // decode fundamental frequency w0 from b0
   b0 = 0;
@@ -185,17 +140,15 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
 #ifdef AMBE_DEBUG
       printf ("Silence Frame\n");
 #endif
-      cur_mp->w0 = ((float) 2 * M_PI) / (float) 32;
+      // TIA-102.BABA-1 §4.1 & §4.3: silence frames use w0 = 2*pi/32, L = 14, all
+      cur_mp->w0 = ((float) 2 * (float) M_PI) / (float) 32;
       cur_mp->L = 14;
-      cur_mp->gamma = -4.0f;
       for (l = 0; l <= 56; l++)
         {
           cur_mp->Vl[l] = 0;
           cur_mp->Ml[l] = 0.0f;
-          cur_mp->log2Ml[l] = -8.0f;
         }
-      mbe_moveMbeParms (cur_mp, prev_mp);
-      return (0);
+      return (4);
     }
   else if ((b0 == 126) || (b0 == 127)) // if w0 bits are 1111110 or 1111111, frame is tone
     {
@@ -205,30 +158,12 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
       return (3);
     }
 
-  if (silence == 0)
-    {
-      // w0 from specification document
-      f0 = AmbeW0table[b0];
-      cur_mp->w0 = f0 * (float) 2 *M_PI;
-      // w0 from patent filings
-      //f0 = powf (2, ((float) b0 + (float) 195.626) / -(float) 45.368);
-      //cur_mp->w0 = f0 * (float) 2 *M_PI;
-    }
-
+  // Smooth pitch law of DVSI's AMBE-3000 for rate 33 (mbelib-neo)
+  f0 = mbe_ambe2450_f0 (b0);
+  cur_mp->w0 = f0 * (float) 2 * (float) M_PI;
   unvc = (float) 0.2046 / sqrtf (cur_mp->w0);
-  //unvc = (float) 1;
-  //unvc = (float) 0.2046 / sqrtf (f0);
-
-  // decode L
-  if (silence == 0)
-    {
-      // L from specification document
-      // lookup L in tabl3
-      L = AmbeLtable[b0];
-      // L formula from patent filings
-      //L=(int)((float)0.4627 / f0);
-      cur_mp->L = L;
-    }
+  L = mbe_ambe2450_harmonic_count (b0);
+  cur_mp->L = L;
 
   // decode V/UV parameters
   // load b1 from ambe_d
@@ -243,8 +178,8 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
     {
       // jl from specification document
       jl = (int) ((float) l * (float) 16.0 * f0);
-      // jl from patent filings?
-      //jl = (int)(((float)l * (float)16.0 * f0) + 0.25);
+      if (jl < 0) jl = 0;
+      else if (jl > 7) jl = 7;
 
       if (silence == 0)
         {
@@ -277,7 +212,8 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   // decode PRBA vectors
   Gm[1] = 0;
 
-  // load b3 from ambe_d
+  // load b3 and b4 from ambe_d using DVSI AMBE-3000 u3 bit assignment:
+  // ambe_d[40..43] carry b4(2), b4(1), b4(0), b3(0)
   b3 = 0;
   b3 |= ambe_d[12]<<8;
   b3 |= ambe_d[13]<<7;
@@ -287,7 +223,7 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   b3 |= ambe_d[17]<<3;
   b3 |= ambe_d[18]<<2;
   b3 |= ambe_d[19]<<1;
-  b3 |= ambe_d[40];
+  b3 |= ambe_d[43];
   Gm[2] = AmbePRBA24[b3][0];
   Gm[3] = AmbePRBA24[b3][1];
   Gm[4] = AmbePRBA24[b3][2];
@@ -298,9 +234,9 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   b4 |= ambe_d[21]<<5;
   b4 |= ambe_d[22]<<4;
   b4 |= ambe_d[23]<<3;
-  b4 |= ambe_d[41]<<2;
-  b4 |= ambe_d[42]<<1;
-  b4 |= ambe_d[43];
+  b4 |= ambe_d[40]<<2;
+  b4 |= ambe_d[41]<<1;
+  b4 |= ambe_d[42];
   Gm[5] = AmbePRBA58[b4][0];
   Gm[6] = AmbePRBA58[b4][1];
   Gm[7] = AmbePRBA58[b4][2];
@@ -324,7 +260,7 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
             {
               am = 2;
             }
-          sum = sum + ((float) am * Gm[m] * cosf ((M_PI * (float) (m - 1) * ((float) i - (float) 0.5)) / (float) 8));
+          sum = sum + ((float) am * Gm[m] * dct_cache->ri_cos[m][i]);
         }
       Ri[i] = sum;
 #ifdef AMBE_DEBUG
@@ -386,9 +322,7 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   printf ("b5: %i b6: %i b7: %i b8: %i\n", b5, b6, b7, b8);
 #endif
 
-  // Load Ci,k with the values from the HOC tables
-  // there appear to be a couple typos in eq. 37 so we will just do what makes sense
-  // (3 <= k <= Ji and k<=6)
+  // Load Ci,k with the values from the HOC tables there appear to be a
   for (k = 3; k <= Ji[1]; k++)
     {
       if (k > 6)
@@ -470,7 +404,7 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
 #ifdef AMBE_DEBUG
               printf ("j: %i Cik[%i][%i]: %f ", j, i, k, Cik[i][k]);
 #endif
-              sum = sum + ((float) ak * Cik[i][k] * cosf ((M_PI * (float) (k - 1) * ((float) j - (float) 0.5)) / (float) ji));
+              sum = sum + ((float) ak * Cik[i][k] * dct_cache->idct_cos[ji][j][k]);
             }
           Tl[l] = sum;
 #ifdef AMBE_DEBUG
@@ -502,6 +436,8 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
       // eq. 40
       flokl[l] = ((float) prev_mp->L / (float) cur_mp->L) * (float) l;
       intkl[l] = (int) (flokl[l]);
+      if (intkl[l] < 0) intkl[l] = 0;
+      if (intkl[l] > 56) intkl[l] = 56;
 #ifdef AMBE_DEBUG
       printf ("flok%i: %f, intk%i: %i ", l, flokl[l], l, intkl[l]);
 #endif
@@ -510,8 +446,9 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
 #ifdef AMBE_DEBUG
       printf ("delta%i: %f ", l, deltal[l]);
 #endif
-      // eq 43
-      Sum43 = Sum43 + ((((float) 1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[intkl[l] + 1]));
+      // eq 43: clamp upper tap to 56 so log2Ml[57] is never read out-of-bounds
+      int upper = (intkl[l] + 1 > 56) ? 56 : (intkl[l] + 1);
+      Sum43 = Sum43 + ((((float) 1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]) + (deltal[l] * prev_mp->log2Ml[upper]));
     }
   Sum43 = (((float) 0.65 / (float) cur_mp->L) * Sum43);
 #ifdef AMBE_DEBUG
@@ -526,23 +463,23 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
       Sum42 += Tl[l];
     }
   Sum42 = Sum42 / (float) cur_mp->L;
-  BigGamma = cur_mp->gamma - ((float) 0.5 * (log ((float) cur_mp->L) / log ((float) 2))) - Sum42;
-  //BigGamma=cur_mp->gamma - ((float)0.5 * log((float)cur_mp->L)) - Sum42;
+  BigGamma = cur_mp->gamma - ((float) 0.5 * log2f ((float) cur_mp->L)) - Sum42;
 
   // Part 3
   for (l = 1; l <= cur_mp->L; l++)
     {
+      int upper = (intkl[l] + 1 > 56) ? 56 : (intkl[l] + 1);
       c1 = ((float) 0.65 * ((float) 1 - deltal[l]) * prev_mp->log2Ml[intkl[l]]);
-      c2 = ((float) 0.65 * deltal[l] * prev_mp->log2Ml[intkl[l] + 1]);
+      c2 = ((float) 0.65 * deltal[l] * prev_mp->log2Ml[upper]);
       cur_mp->log2Ml[l] = Tl[l] + c1 + c2 - Sum43 + BigGamma;
       // inverse log to generate spectral amplitudes
       if (cur_mp->Vl[l] == 1)
         {
-          cur_mp->Ml[l] = exp ((float) 0.693 * cur_mp->log2Ml[l]);
+          cur_mp->Ml[l] = exp2f (cur_mp->log2Ml[l]);
         }
       else
         {
-          cur_mp->Ml[l] = unvc * exp ((float) 0.693 * cur_mp->log2Ml[l]);
+          cur_mp->Ml[l] = unvc * exp2f (cur_mp->log2Ml[l]);
         }
 #ifdef AMBE_DEBUG
       printf ("flokl[%i]: %f, intkl[%i]: %i ", l, flokl[l], l, intkl[l]);
@@ -592,6 +529,8 @@ mbe_processAmbe2450Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
 {
 
   int i, bad;
+  const int c0_uncorrectable = (cur_mp->errorCount4 != 0);
+  cur_mp->errorCount4 = 0;
 
   for (i = 0; i < *errs2; i++)
     {
@@ -599,55 +538,110 @@ mbe_processAmbe2450Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
       err_str++;
     }
 
-  bad = mbe_decodeAmbe2450Parms (ambe_d, cur_mp, prev_mp);
-  if (bad == 2)
+  const float err_rate = (0.95f * prev_mp->errorRate) + (0.001064f * (float) (*errs2));
+
+  // TIA-102.BABA-1 §5.6: repeat criteria (C0 errors >= 4, or erasure frame)
+  if (c0_uncorrectable)
     {
-      // Erasure frame
-      *err_str = 'E';
-      err_str++;
-      cur_mp->repeat = 0;
-    }
-  else if (bad == 3)
-    {
-      // Tone Frame
-      *err_str = 'T';
-      err_str++;
-      cur_mp->repeat = 0;
-    }
-  else if (*errs2 > 3)
-    {
-      mbe_useLastMbeParms (cur_mp, prev_mp);
-      cur_mp->repeat++;
-      *err_str = 'R';
-      err_str++;
+      bad = 2;
     }
   else
     {
-      cur_mp->repeat = 0;
+      bad = mbe_decodeAmbe2450Parms (ambe_d, cur_mp, prev_mp);
     }
 
-  if (bad == 0)
+  cur_mp->errorCountTotal = *errs2;
+  cur_mp->errorRate = err_rate;
+
+  if (bad == 3)
     {
-      if (cur_mp->repeat <= 3)
+      // Tone Frame (§7.3): prediction history prev_mp is untouched; silence prev_mp_enhanced
+      // so the next voice frame fades in cleanly.
+      *err_str = 'T';
+      err_str++;
+      cur_mp->repeat = 0;
+      prev_mp->repeat = 0;
+      prev_mp->errorCountTotal = *errs2;
+      prev_mp->errorRate = err_rate;
+      memset (prev_mp_enhanced->Ml, 0, sizeof (prev_mp_enhanced->Ml));
+      mbe_synthesizeSilencef (aout_buf);
+      *err_str = 0;
+      return;
+    }
+
+  if (bad == 2)
+    {
+      // Invalid / Erasure / Uncorrectable-C0 frame (§5.6)
+      *err_str = c0_uncorrectable ? 'R' : 'E';
+      err_str++;
+      const int next_repeat = prev_mp->repeat + 1;
+      prev_mp->repeat = next_repeat;
+      prev_mp->errorCountTotal = *errs2;
+      prev_mp->errorRate = err_rate;
+
+      if (next_repeat <= 3 && err_rate <= 0.096f)
         {
-          mbe_moveMbeParms (cur_mp, prev_mp);
-          mbe_spectralAmpEnhance (cur_mp);
-          mbe_synthesizeSpeechf (aout_buf, cur_mp, prev_mp_enhanced, uvquality);
+          // §5.6 step 2: repeat the already-enhanced model as-is (no re-enhancement)
+          mbe_useLastMbeParms (cur_mp, prev_mp_enhanced);
+          cur_mp->repeat = next_repeat;
+          cur_mp->errorCountTotal = *errs2;
+          cur_mp->errorRate = err_rate;
+          mbe_synthesizeSpeechWithRm0f (aout_buf, cur_mp, prev_mp_enhanced, uvquality, 0.0f, 1);
           mbe_moveMbeParms (cur_mp, prev_mp_enhanced);
         }
       else
         {
+          // §5.7: 4th consecutive repeat or errorRate > 0.096 mutes and silences prev_mp_enhanced
+          // while preserving prev_mp prediction history
           *err_str = 'M';
           err_str++;
+          memset (prev_mp_enhanced->Ml, 0, sizeof (prev_mp_enhanced->Ml));
           mbe_synthesizeSilencef (aout_buf);
-          mbe_initMbeParms (cur_mp, prev_mp, prev_mp_enhanced);
         }
+      *err_str = 0;
+      return;
     }
-  else
+
+  if (bad == 4)
     {
-      mbe_synthesizeSilencef (aout_buf);
-      mbe_initMbeParms (cur_mp, prev_mp, prev_mp_enhanced);
+      // Silence frame (b0 124/125, §4.1 & §4.3): synthesized so any voiced
+      cur_mp->repeat = 0;
+      prev_mp->repeat = 0;
+      prev_mp->errorCountTotal = *errs2;
+      prev_mp->errorRate = err_rate;
+      if (err_rate > 0.096f)
+        {
+          *err_str = 'M';
+          err_str++;
+          memset (prev_mp_enhanced->Ml, 0, sizeof (prev_mp_enhanced->Ml));
+          mbe_synthesizeSilencef (aout_buf);
+        }
+      else
+        {
+          mbe_synthesizeSpeechWithRm0f (aout_buf, cur_mp, prev_mp_enhanced, uvquality, 0.0f, 1);
+          mbe_moveMbeParms (cur_mp, prev_mp_enhanced);
+        }
+      *err_str = 0;
+      return;
     }
+
+  // Valid voice frame (bad == 0): commits to prev_mp prediction history
+  cur_mp->repeat = 0;
+  mbe_moveMbeParms (cur_mp, prev_mp);
+  if (err_rate > 0.096f)
+    {
+      *err_str = 'M';
+      err_str++;
+      memset (prev_mp_enhanced->Ml, 0, sizeof (prev_mp_enhanced->Ml));
+      mbe_synthesizeSilencef (aout_buf);
+      *err_str = 0;
+      return;
+    }
+
+  // Enhance with DVSI-calibrated +2.5 dB high-band shelf (1.33352143f)
+  const float pre_enh_rm0 = mbe_spectralAmpEnhanceWithRm0 (cur_mp, 1.33352143f);
+  mbe_synthesizeSpeechWithRm0f (aout_buf, cur_mp, prev_mp_enhanced, uvquality, pre_enh_rm0, 0);
+  mbe_moveMbeParms (cur_mp, prev_mp_enhanced);
   *err_str = 0;
 }
 
@@ -667,6 +661,7 @@ mbe_processAmbe3600x2450Framef (float *aout_buf, int *errs2, char *err_str, char
   int errs = 0;
   *errs2 = 0;
   errs = mbe_eccAmbe3600x2450C0 (ambe_fr);
+  cur_mp->errorCount4 = (errs >= 4) ? 1 : 0;
   mbe_demodulateAmbe3600x2450Data (ambe_fr);
   *errs2 = errs;
   *errs2 += mbe_eccAmbe3600x2450Data (ambe_fr, ambe_d);

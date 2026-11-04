@@ -105,7 +105,19 @@ Page {
         }
     }
 
-    readonly property bool wide: scroller.width >= 760
+    readonly property var _smsThreads: (app && app.smsManagerRef) ? (app.smsManagerRef.threads || []) : []
+    function unreadFrom(dmrId) {
+        if (!(dmrId > 0)) return 0
+        var key = "p:" + dmrId
+        for (var i = 0; i < page._smsThreads.length; i++) {
+            var th = page._smsThreads[i]
+            if (th && th.threadKey === key) return parseInt(th.unreadCount || "0") || 0
+        }
+        return 0
+    }
+
+    // Two columns (controls | live activity) from ~700pt: every landscape phone qualifies,
+    readonly property bool wide: scroller.width >= 700
     readonly property int captionLines: (page.wide || scroller.height >= 740 || !connectionSection.expanded) ? 3 : 2
     FontMetrics { id: captionMetrics; font.pixelSize: t.fsBody }
 
@@ -141,15 +153,15 @@ Page {
                 Layout.alignment: Qt.AlignTop
                 spacing: 12
 
-                // ─────────────────────────────────────────────────────────
                 // CONNECTION
-                // ─────────────────────────────────────────────────────────
                 CollapsibleSection {
                     id: connectionSection
                     title: qsTr("Connection")
                     statusText: (appState && appState.connected)
                                 ? (appState.mode + " • " + appState.selectedHost)
                                 : ((appState && appState.connecting) ? qsTr("Connecting…") : "")
+                    // Narrow headers (Slide Over, small phones) drop the mode prefix instead
+                    statusTextShort: (appState && appState.connected) ? appState.selectedHost : ""
                     statusIcon: (appState && appState.connected && appState.odtpActive) ? "\uf0e7" : ""
                     statusColor: (appState && appState.connected) ? t.success : t.warning
                     statusWhenCollapsedOnly: true
@@ -534,9 +546,7 @@ Page {
                     }
                 }
 
-                // ─────────────────────────────────────────────────────────
                 // RX.TX CONTROLS
-                // ─────────────────────────────────────────────────────────
                 CollapsibleSection {
                     id: txSection
                     title: qsTr("RX.TX Controls")
@@ -827,9 +837,7 @@ Page {
                             color: t.textMuted
                         }
 
-                        // ─────────────────────────────────────────────────────
                         // EXPANDABLE DRAWER: VOCODER & GAIN (SWTX, SWRX, AGC)
-                        // ─────────────────────────────────────────────────────
                         Rectangle {
                             id: vocoderDrawer
                             property bool expanded: false
@@ -889,9 +897,10 @@ Page {
                                         }
 
                                         Rectangle {
+                                            visible: vocHeader.width >= 300
                                             radius: 11
                                             Layout.preferredHeight: 22
-                                            Layout.maximumWidth: Math.max(96, vocHeader.width * 0.48)
+                                            Layout.maximumWidth: Math.max(96, vocHeader.width * 0.42)
                                             Layout.preferredWidth: Math.min(vocSummaryLabel.implicitWidth + 16, Layout.maximumWidth)
                                             color: (appState && (appState.swtx || appState.swrx || appState.agc))
                                                    ? t.tint(t.accent, 0.14) : t.surface2
@@ -947,10 +956,16 @@ Page {
                                         id: vocInnerCol
                                         x: 10
                                         y: 4
-                                        width: parent.width - 20
+                                        width: Math.max(0, parent.width - 20)
                             spacing: 8
 
-                                        readonly property int cols: width >= 500 ? 3 : (width >= 290 ? 2 : 1)
+                                        // Updated after the layout pass: changing columns while the parent lays
+                                        property int cols: 2
+                                        function updateCols() {
+                                            var c = width >= 500 ? 3 : (width >= 290 ? 2 : 1)
+                                            if (c !== cols) cols = c
+                                        }
+                                        onWidthChanged: Qt.callLater(updateCols)
 
                                         RowLayout {
                                             Layout.fillWidth: true
@@ -963,6 +978,7 @@ Page {
                                             }
                                             Label {
                                                 Layout.fillWidth: true
+                                                Layout.preferredWidth: 1
                                                 text: qsTr("Tap any card to switch on or off. Hold any card to see what it does.")
                                                 font.pixelSize: t.fsCaption
                                                 color: t.textMuted
@@ -1129,6 +1145,7 @@ Page {
 
                         Label {
                                                             Layout.fillWidth: true
+                                                            Layout.preferredWidth: 1
                                                             text: vocCard.modelData.subtitle
                             font.pixelSize: t.fsCaption
                             color: t.textMuted
@@ -1218,6 +1235,7 @@ Page {
 
                                                     Label {
                                                         Layout.fillWidth: true
+                                                        Layout.preferredWidth: 1
                                                         text: txCol.heldDescription
                                                         font.pixelSize: t.fsCaption
                                                         color: t.text
@@ -1242,9 +1260,7 @@ Page {
                             }
                         }
 
-                        // ─────────────────────────────────────────────────────
                         // EXPANDABLE DRAWER: AUDIO QUALITY & LIVE TRANSCRIPTION
-                        // ─────────────────────────────────────────────────────
                         Rectangle {
                             id: audioClarityDrawer
                             property bool expanded: false
@@ -1309,9 +1325,10 @@ Page {
                                         }
 
                                         Rectangle {
+                                            visible: clarityHeader.width >= 300
                                             radius: 11
                                             Layout.preferredHeight: 22
-                                            Layout.maximumWidth: Math.max(96, clarityHeader.width * 0.48)
+                                            Layout.maximumWidth: Math.max(96, clarityHeader.width * 0.42)
                                             Layout.preferredWidth: Math.min(claritySummaryLabel.implicitWidth + 16, Layout.maximumWidth)
                                             color: (appState && (appState.rxClean || appState.noiseReductionMode > 0 || appState.hdUpscale || appState.txEnhance || appState.transcriptionEnabled))
                                                    ? t.tint(t.accent, 0.14) : t.surface2
@@ -1368,10 +1385,15 @@ Page {
                                         id: clarityCol
                                         x: 10
                                         y: 4
-                                        width: parent.width - 20
+                                        width: Math.max(0, parent.width - 20)
                                         spacing: 8
 
-                                        readonly property int cols: width >= 620 ? 4 : (width >= 290 ? 2 : 1)
+                                        property int cols: 2
+                                        function updateCols() {
+                                            var c = width >= 620 ? 4 : (width >= 290 ? 2 : 1)
+                                            if (c !== cols) cols = c
+                                        }
+                                        onWidthChanged: Qt.callLater(updateCols)
 
                                         property string heldTitle: ""
                                         property string heldBadge: ""
@@ -1405,6 +1427,7 @@ Page {
                                             }
                                             Label {
                                                 Layout.fillWidth: true
+                                                Layout.preferredWidth: 1
                                                 text: qsTr("Tap any card to switch on or off. Hold any card to see what it does.")
                                                 font.pixelSize: t.fsCaption
                                                 color: t.textMuted
@@ -1602,6 +1625,7 @@ Page {
 
                                                         Label {
                                                             Layout.fillWidth: true
+                                                            Layout.preferredWidth: 1
                                                             text: clarityCard.modelData.subtitle
                                                             font.pixelSize: t.fsCaption
                                                             color: t.textMuted
@@ -1704,6 +1728,9 @@ Page {
                                                     border.color: t.stroke
                                                     border.width: 1
 
+                                                    Accessible.role: Accessible.Button
+                                                    Accessible.name: ccSettingsLbl.text
+
                                                     Label {
                                                         id: ccSettingsLbl
                                                         anchors.centerIn: parent
@@ -1713,8 +1740,10 @@ Page {
                                                         color: t.accent
                                                     }
 
+                                                    // Visual pill stays compact; the hit area meets the 28pt minimum
                                                     MouseArea {
                                                         anchors.fill: parent
+                                                        anchors.margins: -7
                                                         cursorShape: Qt.PointingHandCursor
                                                         onClicked: if (page.app) page.app.navigate("settings")
                                                     }
@@ -1782,6 +1811,7 @@ Page {
 
                                                     Label {
                                                         Layout.fillWidth: true
+                                                        Layout.preferredWidth: 1
                                                         text: clarityCol.heldDescription
                                                         font.pixelSize: t.fsCaption
                                                         color: t.text
@@ -1819,9 +1849,7 @@ Page {
                 spacing: 12
             }
 
-            // ─────────────────────────────────────────────────────────
             // LIVE ACTIVITY (moves to its own column on wide screens)
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 id: liveSection
                 parent: page.wide ? rightCol : leftCol
@@ -1873,9 +1901,51 @@ Page {
                         }
                     }
 
-                    // ─────────────────────────────────────────────────────────
+                    // SMS standby started from Messages: voice is quiet until a TG is linked again
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: !!(page.app && page.app.smsStandbyActive && appState &&
+                                    appState.connected && appState.privateCall)
+                        implicitHeight: standbyRow.implicitHeight + 16
+                        radius: 10
+                        color: t.tint(t.accent, 0.10)
+                        border.color: t.tint(t.accent, 0.45)
+                        border.width: 1
+
+                        RowLayout {
+                            id: standbyRow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 6
+                            spacing: 8
+                            Label { text: "\uf0e0"; font.family: "FontAwesome"; color: t.accent }
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("SMS standby: no voice talkgroup linked.")
+                                font.pixelSize: t.fsSmall
+                                color: t.text
+                                wrapMode: Text.WordWrap
+                            }
+                            AppButton {
+                                implicitHeight: 32
+                                leftPadding: 10
+                                rightPadding: 10
+                                font.pixelSize: t.fsSmall
+                                glyph: "\uf028"
+                                text: (page.app && page.app.smsStandbyRestoreTg !== "")
+                                      ? qsTr("Link TG %1").arg(page.app.smsStandbyRestoreTg) : qsTr("Pick TG")
+                                onClicked: {
+                                    if (!page.app) return
+                                    if (page.app.smsStandbyRestoreTg !== "") page.app.leaveSmsStandby("")
+                                    else recentTgSheet.openSheet()
+                                }
+                            }
+                        }
+                    }
+
                     // HOME PAGE FAVOURITE TG SCANNER & QUICK-SWITCH BAR
-                    // ─────────────────────────────────────────────────────────
                     Rectangle {
                         id: homeFavScannerCard
                         Layout.fillWidth: true
@@ -1894,6 +1964,8 @@ Page {
                             anchors.top: parent.top
                             anchors.margins: 8
                             spacing: 6
+                            // Header buttons drop their text labels so the title keeps its room
+                            readonly property bool narrow: width < 330
 
                             RowLayout {
                                 Layout.fillWidth: true
@@ -1929,9 +2001,9 @@ Page {
                                 Rectangle {
                                     id: homeFavScanBtn
                                     readonly property bool scanning: !!(appState && appState.favScanActive)
-                                    radius: 7
-                                    implicitHeight: 24
-                                    implicitWidth: homeFavScanRow.implicitWidth + 12
+                                    radius: 8
+                                    implicitHeight: 30
+                                    implicitWidth: Math.max(30, homeFavScanRow.implicitWidth + 14)
                                     Layout.preferredWidth: implicitWidth
                                     color: scanning ? t.tint(t.success, 0.24) : t.surface2
                                     border.color: scanning ? t.success : t.stroke
@@ -1949,6 +2021,7 @@ Page {
                                             anchors.verticalCenter: parent.verticalCenter
                                         }
                                         Label {
+                                            visible: !homeFavCol.narrow
                                             text: homeFavScanBtn.scanning ? qsTr("Scanning") : qsTr("Scan Favs")
                                             font.pixelSize: t.fsCaption
                                             font.bold: true
@@ -1959,7 +2032,7 @@ Page {
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        anchors.margins: -3
+                                        anchors.margins: -5
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: if (page.app && page.appState) page.app.setFavScanActive(!page.appState.favScanActive)
                                     }
@@ -1968,10 +2041,10 @@ Page {
                                 // Next Active Fav skip button
                                 Rectangle {
                                     visible: !!(appState && (appState.favScanActive || appState.hoselineActiveFavCount > 0))
-                                    radius: 7
-                                    implicitHeight: 24
-                                    implicitWidth: 26
-                                    Layout.preferredWidth: 26
+                                    radius: 8
+                                    implicitHeight: 30
+                                    implicitWidth: 30
+                                    Layout.preferredWidth: 30
                                     color: t.surface2
                                     border.color: t.stroke
                                     border.width: 1
@@ -1986,7 +2059,7 @@ Page {
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        anchors.margins: -3
+                                        anchors.margins: -5
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: if (page.app) page.app.scanHopNext(true)
                                     }
@@ -1994,9 +2067,9 @@ Page {
 
                                 // Open Hoseline Scan page button
                                 Rectangle {
-                                    radius: 7
-                                    implicitHeight: 24
-                                    implicitWidth: openScanRow.implicitWidth + 10
+                                    radius: 8
+                                    implicitHeight: 30
+                                    implicitWidth: Math.max(30, openScanRow.implicitWidth + 14)
                                     Layout.preferredWidth: implicitWidth
                                     color: t.tint(t.accent, 0.14)
                                     border.color: t.tint(t.accent, 0.45)
@@ -2014,6 +2087,7 @@ Page {
                                             anchors.verticalCenter: parent.verticalCenter
                                         }
                                         Label {
+                                            visible: !homeFavCol.narrow
                                             text: qsTr("Scan")
                                             font.pixelSize: t.fsCaption
                                             font.bold: true
@@ -2024,7 +2098,7 @@ Page {
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        anchors.margins: -3
+                                        anchors.margins: -5
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: if (page.app) page.app.navigate("scan")
                                     }
@@ -2036,15 +2110,15 @@ Page {
                                 id: homeFavStrip
                                 Layout.fillWidth: true
                                 visible: !!(appState && appState.hoselineFavCalls && appState.hoselineFavCalls.length > 0)
-                                implicitHeight: 28
+                                implicitHeight: 34
                                 contentWidth: homeFavRow.implicitWidth
-                                contentHeight: 28
+                                contentHeight: 34
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds
 
                                 Row {
                                     id: homeFavRow
-                                    height: 28
+                                    height: 34
                                     spacing: 6
 
                                     Repeater {
@@ -2055,9 +2129,10 @@ Page {
                                             readonly property bool isLive: !!modelData.isLive
                                             readonly property bool isTuned: !!(appState && String(appState.dmrtgid) === String(modelData.tgid))
 
-                                            height: 26
-                                            width: Math.min(220, pillInner.implicitWidth + 14)
-                                            radius: 8
+                                            height: 32
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: Math.min(220, pillInner.implicitWidth + 18)
+                                            radius: 9
                                             clip: true
                                             color: isLive ? t.tint(t.success, 0.22)
                                                  : (isTuned ? t.tint(t.accent, 0.22) : t.surface2)
@@ -2152,6 +2227,94 @@ Page {
                                     color: t.text
                                     elide: Text.ElideRight
                                 }
+                                // Instant message the station that is talking right now
+                                Rectangle {
+                                    id: rxMessagePill
+                                    readonly property int rxId: parseInt(appState ? (appState.data2 || "0") : "0") || 0
+                                    readonly property int unread: page.unreadFrom(rxId)
+                                    visible: !!(appState && appState.mode === "DMR" && !appState.txActive &&
+                                                rxId > 0 && rxId !== parseInt(appState.dmrid || "0"))
+                                    Layout.alignment: Qt.AlignVCenter
+                                    implicitHeight: 34
+                                    implicitWidth: rxMsgRow.implicitWidth + 22
+                                    radius: 17
+                                    color: rxMsgMouse.pressed ? Qt.darker(t.accentStrong, 1.15) : t.accentStrong
+                                    border.color: t.tint(t.accent, 0.9)
+                                    border.width: 1
+                                    scale: rxMsgMouse.pressed ? 0.95 : 1
+                                    Behavior on scale { NumberAnimation { duration: t.durFast } }
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: qsTr("Send DMR message to %1").arg(appState ? appState.data1 : "")
+
+                                    // Soft ripple while the station is on air
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: parent.width
+                                        height: parent.height
+                                        radius: parent.radius
+                                        color: "transparent"
+                                        border.color: t.accent
+                                        border.width: 2
+                                        SequentialAnimation on opacity {
+                                            running: rxMessagePill.visible && Qt.application.state === Qt.ApplicationActive
+                                            loops: Animation.Infinite
+                                            NumberAnimation { from: 0.6; to: 0; duration: 1400; easing.type: Easing.OutCubic }
+                                            PauseAnimation { duration: 400 }
+                                        }
+                                        SequentialAnimation on scale {
+                                            running: rxMessagePill.visible && Qt.application.state === Qt.ApplicationActive
+                                            loops: Animation.Infinite
+                                            NumberAnimation { from: 1.0; to: 1.25; duration: 1400; easing.type: Easing.OutCubic }
+                                            PauseAnimation { duration: 400 }
+                                        }
+                                    }
+
+                                    Row {
+                                        id: rxMsgRow
+                                        anchors.centerIn: parent
+                                        spacing: 6
+                                        Label {
+                                            text: "\uf0e0"
+                                            font.family: "FontAwesome"
+                                            font.pixelSize: 13
+                                            color: "white"
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                        Label {
+                                            visible: heroCol.width >= 300
+                                            text: qsTr("Message")
+                                            font.pixelSize: t.fsSmall
+                                            font.bold: true
+                                            color: "white"
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                        Rectangle {
+                                            visible: rxMessagePill.unread > 0
+                                            width: Math.max(16, rxUnreadLbl.implicitWidth + 8)
+                                            height: 16
+                                            radius: 8
+                                            color: t.danger
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            Label {
+                                                id: rxUnreadLbl
+                                                anchors.centerIn: parent
+                                                text: rxMessagePill.unread
+                                                font.pixelSize: 9
+                                                font.bold: true
+                                                color: "white"
+                                            }
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: rxMsgMouse
+                                        anchors.fill: parent
+                                        anchors.margins: -4
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: if (page.app)
+                                            page.app.openMessageTo(rxMessagePill.rxId, appState.data1, false)
+                                    }
+                                }
                             }
                             Label {
                                 Layout.fillWidth: true
@@ -2165,9 +2328,7 @@ Page {
                         }
                     }
 
-                    // ─────────────────────────────────────────────────────────
                     // LIVE TRANSCRIPTION (Adaptive 2-3 line turn box + 1-tap toggle)
-                    // ─────────────────────────────────────────────────────────
                     Rectangle {
                         id: captionCard
                         Layout.fillWidth: true
@@ -2191,6 +2352,8 @@ Page {
                             spacing: 6
 
                             readonly property bool wideCard: width >= 480
+                            // Below this the header drops its secondary pills so the essentials fit
+                            readonly property bool narrowCard: width < 300
                             readonly property bool rxActiveNow: !!(appState && appState.connected && appState.data1 !== "")
                             readonly property bool hasCaptionText: !!(appState && appState.connected && appState.currentTranscript !== "")
                             readonly property bool showCaptionBody: !!(appState && appState.transcriptionEnabled &&
@@ -2224,12 +2387,15 @@ Page {
                                     font.bold: true
                                     color: (appState && appState.transcriptionEnabled) ? t.text : t.textMuted
                                     elide: Text.ElideRight
+                                    Layout.fillWidth: true
                                     Layout.minimumWidth: 44
                                     Layout.preferredWidth: implicitWidth
+                                    Layout.maximumWidth: Math.ceil(implicitWidth) + 1
                                 }
 
                                 // BETA badge pill next to Live Captions
                                 Rectangle {
+                                    visible: !captionCardCol.narrowCard
                                     radius: 5
                                     implicitHeight: 16
                                     implicitWidth: betaBadgeLabel.implicitWidth + 8
@@ -2249,14 +2415,14 @@ Page {
                                     }
                                 }
 
-                                // Inline speaker badge on wide cards (>= 480px); on compact phones it sits on its own row below
+                                // Inline speaker badge on wide cards (>= 480px); on compact phones
                                 Rectangle {
                                     visible: captionCardCol.wideCard && captionCardCol.showCaptionBody && captionCardCol.speakerText !== ""
                                     radius: 6
                                     clip: true
                                     color: t.tint(t.accent, 0.18)
                                     implicitHeight: 18
-                                    implicitWidth: turnCallWideLabel.implicitWidth + 12
+                                    implicitWidth: Math.ceil(turnCallWideLabel.implicitWidth) + 14
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
                                     Layout.preferredWidth: implicitWidth
@@ -2282,17 +2448,18 @@ Page {
 
                                 // Language + Engine badge (tap to configure in Settings)
                                 Rectangle {
-                                    visible: !!(appState && appState.transcriptionEnabled)
+                                    visible: !!(appState && appState.transcriptionEnabled) && !captionCardCol.narrowCard
                                     radius: 6
                                     clip: true
                                     color: t.surface3
                                     border.color: t.stroke
                                     border.width: 1
-                                    implicitHeight: 22
-                                    implicitWidth: langPillLabel.implicitWidth + 10
+                                    implicitHeight: 28
+                                    implicitWidth: Math.ceil(langPillLabel.implicitWidth) + 10
+                                    Layout.fillWidth: true
                                     Layout.minimumWidth: 48
                                     Layout.preferredWidth: implicitWidth
-                                    Layout.maximumWidth: Math.max(72, captionCardCol.width * 0.36)
+                                    Layout.maximumWidth: Math.min(implicitWidth, Math.max(72, captionCardCol.width * 0.36))
                                     Label {
                                         id: langPillLabel
                                         anchors.fill: parent
@@ -2328,7 +2495,7 @@ Page {
                                 Rectangle {
                                     id: inlineCcToggle
                                     radius: 8
-                                    implicitHeight: 24
+                                    implicitHeight: 28
                                     implicitWidth: inlineCcRow.implicitWidth + 12
                                     Layout.preferredWidth: implicitWidth
                                     Layout.minimumWidth: implicitWidth
@@ -2366,14 +2533,14 @@ Page {
                                 }
                             }
 
-                            // Dedicated speaker pill row on compact phone screens (< 480px) so it never crowds the header
+                            // Dedicated speaker pill row on compact phone screens (< 480px) so
                             Rectangle {
                                 visible: !captionCardCol.wideCard && captionCardCol.showCaptionBody && captionCardCol.speakerText !== ""
                                 radius: 6
                                 clip: true
                                 color: t.tint(t.accent, 0.18)
                                 implicitHeight: 20
-                                implicitWidth: Math.min(captionCardCol.width, turnCallCompactLabel.implicitWidth + 14)
+                                implicitWidth: Math.min(captionCardCol.width, Math.ceil(turnCallCompactLabel.implicitWidth) + 15)
                                 Layout.maximumWidth: captionCardCol.width
 
                                 Label {
@@ -2513,8 +2680,8 @@ Page {
                     // Last heard
                     ColumnLayout {
                         Layout.fillWidth: true
-                        visible: !!(appState && appState.lastHeard1 !== "")
-                        spacing: 4
+                        visible: !!(appState && appState.lastHeardEntries && appState.lastHeardEntries.length > 0)
+                        spacing: 2
 
                         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: t.stroke }
 
@@ -2530,17 +2697,85 @@ Page {
                         }
 
                         Repeater {
-                            model: 5
-                            delegate: Label {
+                            model: appState ? (appState.lastHeardEntries || []) : []
+                            delegate: Rectangle {
+                                id: heardRow
+                                required property var modelData
                                 required property int index
-                                readonly property string entry: appState ? appState["lastHeard" + (index + 1)] : ""
+                                readonly property int heardId: modelData.dmrID || 0
+                                readonly property bool canMessage: heardId > 0 &&
+                                                                   heardId !== parseInt(appState.dmrid || "0")
+                                readonly property bool onAirNow: !!(appState && appState.data1 !== "" &&
+                                                                    parseInt(appState.data2 || "0") === heardId)
+                                readonly property int unread: page.unreadFrom(heardId)
+
                                 Layout.fillWidth: true
-                                visible: entry !== ""
-                                text: entry
-                                font.pixelSize: t.fsSmall
-                                color: t.text
-                                opacity: 0.95 - index * 0.12
-                                elide: Text.ElideRight
+                                implicitHeight: 46
+                                radius: 10
+                                color: onAirNow ? t.tint(t.success, 0.10) : "transparent"
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 6
+                                    anchors.rightMargin: 2
+                                    spacing: 10
+
+                                    ChatAvatar {
+                                        size: 30
+                                        glyph: heardRow.onAirNow ? "\uf130" : "\uf007"
+                                        tone: heardRow.onAirNow ? t.success : t.accent
+                                        opacity: 1.0 - heardRow.index * 0.08
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.minimumWidth: 0
+                                        spacing: 0
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            Label {
+                                                Layout.fillWidth: true
+                                                Layout.minimumWidth: 0
+                                                text: heardRow.modelData.callsign !== "" ? heardRow.modelData.callsign
+                                                                                         : qsTr("ID %1").arg(heardRow.heardId)
+                                                font.pixelSize: t.fsBody
+                                                font.bold: true
+                                                color: t.text
+                                                elide: Text.ElideRight
+                                            }
+                                            Label {
+                                                visible: heardRow.modelData.tgid > 0 && page.wide
+                                                text: "TG " + heardRow.modelData.tgid
+                                                font.pixelSize: t.fsCaption
+                                                color: t.textMuted
+                                            }
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            visible: text !== ""
+                                            text: heardRow.modelData.fname +
+                                                  ((heardRow.modelData.fname !== "" && heardRow.modelData.country !== "") ? " • " : "") +
+                                                  heardRow.modelData.country
+                                            font.pixelSize: t.fsCaption
+                                            color: t.textMuted
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+
+                                    RoundIconButton {
+                                        visible: heardRow.canMessage
+                                        implicitWidth: 38
+                                        implicitHeight: 38
+                                        glyphSize: 15
+                                        glyph: heardRow.unread > 0 ? "\uf0e0" : "\uf003"
+                                        tone: heardRow.unread > 0 ? t.accent : t.textMuted
+                                        badge: heardRow.unread
+                                        accessibleName: qsTr("Message %1").arg(heardRow.modelData.callsign || heardRow.heardId)
+                                        onClicked: if (page.app)
+                                            page.app.openMessageTo(heardRow.heardId, heardRow.modelData.callsign, false)
+                                    }
+                                }
                             }
                         }
                     }
@@ -2548,188 +2783,185 @@ Page {
             }
         }
 
-        // ─────────────────────────────────────────────────────────
-        // COMPACT RESPONSIVE HOMEPAGE FOOTER CARD (Made with ♥ VU3LVO + support statement + pills)
-        // ─────────────────────────────────────────────────────────
+        // COMPACT RESPONSIVE HOMEPAGE FOOTER CARD (Made with ♥ VU3LVO + support statement
         Rectangle {
             id: homeFooter
             x: contentRow.x
             y: contentRow.y + contentRow.implicitHeight + 12
             width: contentRow.width
-            implicitHeight: footerCol.implicitHeight + 24
+            implicitHeight: (sideBySide ? Math.max(footerText.implicitHeight, footerButtons.implicitHeight)
+                                        : footerText.implicitHeight + 10 + footerButtons.implicitHeight) + 24
             radius: t.rMd
             clip: true
             color: t.surface2
             border.color: t.stroke
             border.width: 1
 
-            readonly property bool sideBySide: width >= 560
+            // Decided after the layout pass: flipping it mid-pass changes several layout
+            property bool sideBySide: false
+            function updateArrangement() {
+                var v = width >= 560
+                if (v !== sideBySide) sideBySide = v
+            }
+            onWidthChanged: Qt.callLater(updateArrangement)
 
-            ColumnLayout {
-                id: footerCol
+            // Positioner + anchors: wrapped text inside nested grid layouts needs a third layout pass
+            Column {
+                id: footerText
                 anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 10
+                anchors.right: homeFooter.sideBySide ? footerButtons.left : parent.right
+                anchors.rightMargin: homeFooter.sideBySide ? 14 : 12
+                y: homeFooter.sideBySide ? Math.round((homeFooter.height - height) / 2) : 12
+                spacing: 4
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: homeFooter.sideBySide ? 2 : 1
-                    columnSpacing: 14
-                    rowSpacing: 10
+                Item {
+                    width: parent.width
+                    height: sigRow.implicitHeight
 
-                    // Left / Top: Signature ("Made with ♥ by VU3LVO") + Impactful Free-Forever Statement
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 0
-                        spacing: 4
+                    Row {
+                        id: sigRow
+                        x: homeFooter.sideBySide ? 0 : (parent.width - width) / 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
 
-                        Item {
-                            Layout.fillWidth: true
-                            implicitHeight: sigRow.implicitHeight
-                            implicitWidth: sigRow.implicitWidth
-
-                            Row {
-                                id: sigRow
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.horizontalCenter: homeFooter.sideBySide ? undefined : parent.horizontalCenter
-                                anchors.left: homeFooter.sideBySide ? parent.left : undefined
-                                spacing: 6
-
-                                Label {
-                                    text: qsTr("Made with")
-                                    font.pixelSize: t.fsSmall
-                                    color: t.textMuted
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                Label {
-                                    text: "\uf004"
-                                    font.family: "FontAwesome"
-                                    font.pixelSize: 11
-                                    color: t.danger
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                Label {
-                                    text: qsTr("by")
-                                    font.pixelSize: t.fsSmall
-                                    color: t.textMuted
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                Rectangle {
-                                    radius: 6
-                                    implicitHeight: 20
-                                    implicitWidth: vuCallLabel.implicitWidth + 12
-                                    color: t.tint(t.accent, 0.16)
-                                    border.color: t.tint(t.accent, 0.45)
-                                    border.width: 1
-                                    anchors.verticalCenter: parent.verticalCenter
-
-                                    Label {
-                                        id: vuCallLabel
-                                        anchors.centerIn: parent
-                                        text: "VU3LVO"
-                                        font.pixelSize: t.fsCaption
-                                        font.bold: true
-                                        color: t.accent
-                                    }
-                                }
-                            }
+                        Label {
+                            text: qsTr("Made with")
+                            font.pixelSize: t.fsSmall
+                            color: t.textMuted
+                            anchors.verticalCenter: parent.verticalCenter
                         }
 
                         Label {
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            horizontalAlignment: homeFooter.sideBySide ? Text.AlignLeft : Text.AlignHCenter
-                            text: qsTr("Built for the amateur radio community. Your support keeps DroidStar free and on the air for everyone.")
-                            font.pixelSize: t.fsCaption
+                            text: "\uf004"
+                            font.family: "FontAwesome"
+                            font.pixelSize: 11
+                            color: t.danger
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Label {
+                            text: qsTr("by")
+                            font.pixelSize: t.fsSmall
                             color: t.textMuted
-                            opacity: 0.9
-                            wrapMode: Text.WordWrap
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Rectangle {
+                            radius: 6
+                            implicitHeight: 20
+                            implicitWidth: vuCallLabel.implicitWidth + 12
+                            color: t.tint(t.accent, 0.16)
+                            border.color: t.tint(t.accent, 0.45)
+                            border.width: 1
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Label {
+                                id: vuCallLabel
+                                anchors.centerIn: parent
+                                text: "VU3LVO"
+                                font.pixelSize: t.fsCaption
+                                font.bold: true
+                                color: t.accent
+                            }
                         }
                     }
+                }
 
-                    // Support buttons row: equal 50/50 split on mobile portrait, compact right-aligned pills on wide screens
-                    RowLayout {
+                Label {
+                    width: parent.width
+                    horizontalAlignment: homeFooter.sideBySide ? Text.AlignLeft : Text.AlignHCenter
+                    text: qsTr("Built for the amateur radio community. Your support keeps DroidStar free and on the air for everyone.")
+                    font.pixelSize: t.fsCaption
+                    color: t.textMuted
+                    opacity: 0.9
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            // Support buttons: equal split under the text on phones, compact pills
+            RowLayout {
+                id: footerButtons
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                // Explicit width: dropping a left anchor at runtime would keep the stretched width
+                width: homeFooter.sideBySide ? implicitWidth : homeFooter.width - 24
+                y: homeFooter.sideBySide ? Math.round((homeFooter.height - height) / 2)
+                                         : footerText.y + footerText.height + 10
+                spacing: 8
+
+                Repeater {
+                    model: [
+                        {
+                            label: qsTr("Buy Me a Coffee"),
+                            icon: "\uf0f4",
+                            url: "https://buymeacoffee.com/rohithz",
+                            tintColor: "#F59E0B",
+                            iconColor: "#FBBF24"
+                        },
+                        {
+                            label: qsTr("PayPal Donation"),
+                            icon: "\uf1ed",
+                            url: "https://www.paypal.com/ncp/payment/NU89529268M2W",
+                            tintColor: "#38BDF8",
+                            iconColor: "#38BDF8"
+                        }
+                    ]
+
+                    delegate: Rectangle {
+                        id: miniDonatePill
+                        required property var modelData
+                        readonly property color accentTone: modelData.tintColor
+                        // Natural size from the texts' implicit widths, never from the clamped label width
+                        readonly property real naturalWidth: donateIcon.implicitWidth + 6 + donateLabel.implicitWidth + 24
+
                         Layout.fillWidth: !homeFooter.sideBySide
-                        Layout.alignment: homeFooter.sideBySide ? (Qt.AlignRight | Qt.AlignVCenter) : Qt.AlignHCenter
-                        spacing: 8
+                        Layout.preferredWidth: homeFooter.sideBySide ? naturalWidth : 1
+                        Layout.minimumWidth: homeFooter.sideBySide ? naturalWidth : 0
+                        Layout.preferredHeight: 40
+                        implicitHeight: 40
+                        implicitWidth: naturalWidth
+                        radius: 10
+                        clip: true
+                        color: t.tint(accentTone, miniDonateMouse.pressed ? 0.28 : 0.15)
+                        border.color: t.tint(accentTone, miniDonateMouse.pressed ? 0.85 : 0.55)
+                        border.width: 1
+                        scale: miniDonateMouse.pressed ? 0.98 : 1.0
+                        Behavior on scale { NumberAnimation { duration: t.durFast } }
+                        Behavior on color { ColorAnimation { duration: t.durFast } }
 
-                        Repeater {
-                            model: [
-                                {
-                                    label: qsTr("Buy Me a Coffee"),
-                                    icon: "\uf0f4",
-                                    url: "https://buymeacoffee.com/rohithz",
-                                    tintColor: "#F59E0B",
-                                    iconColor: "#FBBF24"
-                                },
-                                {
-                                    label: qsTr("PayPal Donation"),
-                                    icon: "\uf1ed",
-                                    url: "https://www.paypal.com/ncp/payment/NU89529268M2W",
-                                    tintColor: "#38BDF8",
-                                    iconColor: "#38BDF8"
-                                }
-                            ]
+                        Row {
+                            id: btnInnerRow
+                            anchors.centerIn: parent
+                            spacing: 6
 
-                            delegate: Rectangle {
-                                id: miniDonatePill
-                                required property var modelData
-                                readonly property color accentTone: modelData.tintColor
-
-                                Layout.fillWidth: !homeFooter.sideBySide
-                                Layout.preferredWidth: homeFooter.sideBySide ? (btnInnerRow.implicitWidth + 24) : 1
-                                Layout.minimumWidth: homeFooter.sideBySide ? (btnInnerRow.implicitWidth + 24) : 0
-                                Layout.preferredHeight: 34
-                                implicitHeight: 34
-                                implicitWidth: btnInnerRow.implicitWidth + 24
-                                radius: 10
-                                clip: true
-                                color: t.tint(accentTone, miniDonateMouse.pressed ? 0.28 : 0.15)
-                                border.color: t.tint(accentTone, miniDonateMouse.pressed ? 0.85 : 0.55)
-                                border.width: 1
-                                scale: miniDonateMouse.pressed ? 0.98 : 1.0
-                                Behavior on scale { NumberAnimation { duration: t.durFast } }
-                                Behavior on color { ColorAnimation { duration: t.durFast } }
-
-                                Row {
-                                    id: btnInnerRow
-                                    anchors.centerIn: parent
-                                    spacing: 6
-
-                                    Label {
-                                        text: miniDonatePill.modelData.icon
-                                        font.family: "FontAwesome"
-                                        font.pixelSize: 12
-                                        color: miniDonatePill.modelData.iconColor
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-
-                                    Label {
-                                        width: miniDonatePill.width > 34
-                                               ? Math.min(implicitWidth, Math.max(0, miniDonatePill.width - 34))
-                                               : implicitWidth
-                                        text: miniDonatePill.modelData.label
-                                        font.pixelSize: t.fsSmall
-                                        font.bold: true
-                                        color: t.text
-                                        elide: Text.ElideRight
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                }
-
-                                MouseArea {
-                                    id: miniDonateMouse
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: Qt.openUrlExternally(miniDonatePill.modelData.url)
-                                }
+                            Label {
+                                id: donateIcon
+                                text: miniDonatePill.modelData.icon
+                                font.family: "FontAwesome"
+                                font.pixelSize: 12
+                                color: miniDonatePill.modelData.iconColor
+                                anchors.verticalCenter: parent.verticalCenter
                             }
+
+                            Label {
+                                id: donateLabel
+                                width: Math.min(implicitWidth,
+                                                Math.max(0, miniDonatePill.width - 24 - donateIcon.implicitWidth - 6))
+                                text: miniDonatePill.modelData.label
+                                font.pixelSize: t.fsSmall
+                                font.bold: true
+                                color: t.text
+                                elide: Text.ElideRight
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+
+                        MouseArea {
+                            id: miniDonateMouse
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Qt.openUrlExternally(miniDonatePill.modelData.url)
                         }
                     }
                 }
@@ -2737,9 +2969,7 @@ Page {
         }
     }
 
-    // ─────────────────────────────────────────────────────────
     // SEARCHABLE RECENT & FAVOURITE TALKGROUPS SHEET
-    // ─────────────────────────────────────────────────────────
     Popup {
         id: recentTgSheet
         parent: Overlay.overlay
@@ -2761,9 +2991,11 @@ Page {
         readonly property real kb: Qt.inputMethod.visible ? Qt.inputMethod.keyboardRectangle.height : 0
 
         width: wideSheet ? Math.min(520, ow - 48) : ow
-        height: Math.max(280, Math.min(wideSheet ? 580 : oh * 0.78, oh - kb - safeTop - 24))
+        readonly property real centeredRoom: oh - safeTop - Math.max(kb, safeBottom) - 48
+        height: Math.max(Math.min(280, centeredRoom), Math.min(wideSheet ? 580 : oh * 0.78,
+                                                     wideSheet ? centeredRoom : oh - kb - safeTop - 24))
         x: (ow - width) / 2
-        y: wideSheet ? Math.max(safeTop + 24, (oh - kb - height) / 2) : oh - kb - height
+        y: wideSheet ? safeTop + 24 + Math.max(0, (centeredRoom - height) / 2) : oh - kb - height
 
         Overlay.modal: Rectangle { color: "#99000000" }
         background: Rectangle {
@@ -2849,7 +3081,8 @@ Page {
                     Label {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
-                        text: qsTr("Recent & Favourite Talkgroups")
+                        // Short title on narrow sheets (Slide Over) instead of eliding mid-word
+                        text: recentTgSheet.width < 360 ? qsTr("Talkgroups") : qsTr("Recent & Favourite Talkgroups")
                         font.pixelSize: t.fsTitle
                         font.bold: true
                         color: t.text
@@ -2966,7 +3199,7 @@ Page {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
                         glyph: "\uf127"
-                        text: qsTr("Unlink (TG 4000)")
+                        text: recentTgSheet.width >= 360 ? qsTr("Unlink (TG 4000)") : qsTr("Unlink 4000")
                         onClicked: recentTgSheet.selectTg("4000")
                     }
 
@@ -2974,7 +3207,7 @@ Page {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
                         glyph: "\uf130"
-                        text: qsTr("Parrot (9990)")
+                        text: recentTgSheet.width >= 360 ? qsTr("Parrot (9990)") : qsTr("Parrot")
                         onClicked: recentTgSheet.selectTg("9990", true)
                     }
                 }

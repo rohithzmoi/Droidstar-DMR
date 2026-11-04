@@ -30,6 +30,9 @@ public:
 private:
 	int m_p25cnt;
 	uint8_t imbe[11U];
+	// last good IMBE frame, re-decoded for concealment when a network frame is late
+	uint8_t m_lastImbe[11U] {};
+	bool m_haveLastImbe = false;
 	int m_dstid;
 	uint32_t m_txdstid;
 private slots:

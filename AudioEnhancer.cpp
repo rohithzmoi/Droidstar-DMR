@@ -29,6 +29,7 @@
 #include <QFileInfo>
 #include <QMutex>
 #include <QStandardPaths>
+#include <QThread>
 #include <QThreadPool>
 #include <QDebug>
 #include <algorithm>
@@ -38,12 +39,32 @@
 
 namespace {
 
-// 16-tap maximally-flat Lagrange half-band polyphase FIR coefficients (-77.5 dB THD+N at 1 kHz)
-// 2 * (kHalfBand0 + kHalfBand1 + kHalfBand2 + kHalfBand3) == 1.0f
+// 16-tap maximally-flat Lagrange half-band polyphase FIR coefficients (-77.5 dB THD+N at
 constexpr float kHalfBand0 = -5.0f / 2048.0f;
 constexpr float kHalfBand1 =  49.0f / 2048.0f;
 constexpr float kHalfBand2 = -245.0f / 2048.0f;
 constexpr float kHalfBand3 =  1225.0f / 2048.0f;
+
+// RX upsample lowpass taps (127-tap Kaiser, half stored).
+constexpr float kRxInterp[64] = {
+     1.046493600e-03f, -6.820636521e-04f, -1.402675999e-03f,  6.628593042e-04f,
+     1.810055254e-03f, -5.728354198e-04f, -2.262417861e-03f,  3.963856184e-04f,
+     2.750437470e-03f, -1.180278135e-04f, -3.261499740e-03f, -2.770932643e-04f,
+     3.779598435e-03f,  8.026806444e-04f, -4.285305268e-03f, -1.470753413e-03f,
+     4.755811602e-03f,  2.291126512e-03f, -5.165034711e-03f, -3.270920356e-03f,
+     5.483774962e-03f,  4.414118522e-03f, -5.679902493e-03f, -5.721190928e-03f,
+     5.718542391e-03f,  7.188798542e-03f, -5.562214947e-03f, -8.809593537e-03f,
+     5.170870726e-03f,  1.057212616e-02f, -4.501736265e-03f, -1.246086645e-02f,
+     3.508850219e-03f,  1.445634530e-02f, -2.142113372e-03f, -1.653541574e-02f,
+     3.455832686e-04f,  1.867163095e-02f,  1.945413905e-03f, -2.083573198e-02f,
+    -4.809063046e-03f,  2.299623410e-02f,  8.344963111e-03f, -2.512009698e-02f,
+    -1.268740408e-02f,  2.717346117e-02f,  1.802836870e-02f, -2.912243049e-02f,
+    -2.465923329e-02f,  3.093387795e-02f,  3.305117101e-02f, -3.257625185e-02f,
+    -4.402334536e-02f,  3.402035809e-02f,  5.913524106e-02f, -3.524009507e-02f,
+    -8.175113370e-02f,  3.621311886e-02f,  1.206583224e-01f, -3.692141810e-02f,
+    -2.081561363e-01f,  3.735178100e-02f,  6.352051420e-01f,  9.624009174e-01f,
+};
+inline float rxInterpTap(int k) { return kRxInterp[k < 64 ? k : 126 - k]; }
 
 #if DS_ENHANCER_HAS_SHERPA
 struct BundledGtcrnState {
@@ -184,7 +205,24 @@ AudioEnhancer::AudioEnhancer(Role role)
     }
 }
 
-AudioEnhancer::~AudioEnhancer() = default;
+AudioEnhancer::~AudioEnhancer()
+{
+    m_neuralShutdown.store(true, std::memory_order_relaxed);
+    waitForNeuralWorker();
+}
+
+void AudioEnhancer::waitForNeuralWorker()
+{
+    // The worker exits as soon as it sees no pending frame (or
+    {
+        QMutexLocker lock(&m_neuralJobMutex);
+        m_neuralPendingValid = false;
+        m_neuralPendingFrame.clear();
+    }
+    while (m_neuralWorkerBusy.load(std::memory_order_acquire)) {
+        QThread::yieldCurrentThread();
+    }
+}
 
 AudioEnhancer::Biquad AudioEnhancer::makeLowpass(float fs, float fc, float Q)
 {
@@ -283,29 +321,26 @@ float AudioEnhancer::softLimitSample(float x, float knee, float limit)
 
 void AudioEnhancer::initFilters()
 {
-    // RX 8 kHz base sub-bass DC/rumble filter (85 Hz Butterworth — preserves male fundamental voice pitch >= 95 Hz)
+    // RX 8 kHz base sub-bass DC/rumble filter (85 Hz Butterworth — preserves male fundamental
     m_rx8kHpf = makeHighpass(8000.0f, 85.0f, 0.70710678f);
 
-    // Sidechain energy detectors for RX Dynamic De-Hisser & Soft Syllabic Expander (never subtracted from signal!)
+    // Sidechain energy detectors for RX Dynamic De-Hisser & Soft Syllabic Expander (never
     m_rxVoiceBandDetector = makeBandpass(8000.0f, 750.0f, 0.70f);
     m_rxHissBandDetector  = makeHighpass(8000.0f, 2600.0f, 0.70710678f);
 
-    // RX Vocal Clarity EQ (100% linear biquads, zero low-pass muffling, zero IMD/comb distortion)
+    // RX Vocal Clarity EQ (100% linear biquads, zero low-pass muffling, zero IMD/comb
     m_rxWarmthEq   = makePeakingEq(8000.0f, 210.0f, 0.80f, 2.2f);   // Vocal chest warmth
     m_rxAntiBoxEq  = makePeakingEq(8000.0f, 520.0f, 1.15f, -3.0f);  // Removes hollow boxy vocoder resonance
     m_rxPresenceEq = makePeakingEq(8000.0f, 2150.0f, 0.85f, 3.6f);  // Crisp consonant & callsign articulation
     m_rxSilkLpf    = makeLowpass(8000.0f, 3450.0f, 0.70710678f);    // Unused in light RX path (kept for ABI compatibility)
 
-    // TX 8 kHz / 16 kHz Formant & Clarity Conditioner:
-    // - 85 Hz sub-sonic rumble high-pass filter (removes cooling fan hum & desk thumps while preserving male F0)
-    // - Sidechain voice (700 Hz) vs hiss (>2500 Hz) energy detectors for Natural VAD & noise gating
-    // - 8 kHz HD Voice clarity contour (+1.2 dB @ 220 Hz chest warmth + +1.8 dB @ 2000 Hz vocal articulation)
-    m_txHpf               = makeHighpass(8000.0f, 85.0f, 0.70710678f);
-    m_txHpf2              = makeHighpass(16000.0f, 85.0f, 0.70710678f);
+    // TX conditioner: 200 Hz HPF, then 8 kHz path.
+    m_txHpf               = makeHighpass(16000.0f, 200.0f, 0.70710678f);
+    m_txHpf2              = makeHighpass(16000.0f, 200.0f, 0.70710678f);
     m_txVoiceBandDetector = makeBandpass(8000.0f, 700.0f, 0.65f);
     m_txHissBandDetector  = makeHighpass(8000.0f, 2500.0f, 0.70710678f);
-    m_txWarmthEq          = makePeakingEq(8000.0f, 220.0f, 0.85f, 1.2f);
-    m_txPresenceEq        = makePeakingEq(8000.0f, 2000.0f, 0.85f, 1.8f);
+    m_txWarmthEq          = makePeakingEq(8000.0f, 220.0f, 0.85f, 0.0f);   // unused (kept for ABI)
+    m_txPresenceEq        = makePeakingEq(8000.0f, 2300.0f, 0.80f, 3.5f);
     m_txAntiAliasLpf1     = makeLowpass(16000.0f, 3750.0f, 0.70710678f);
     m_txAntiAliasLpf2     = makeLowpass(16000.0f, 3750.0f, 0.70710678f);
 }
@@ -353,16 +388,18 @@ void AudioEnhancer::reset()
     m_txWinCounter = 0;
     m_txFrameCount = 0;
     m_txGain = 1.0f;
-    m_txExpanderGain = 0.0f;
+    m_txExpanderGain = 1.0f;
     m_txDeHissState = 0.0f;
     m_txHangCounter = 0;
 
+    waitForNeuralWorker();
+    m_neuralConfLatest.store(-1.0f, std::memory_order_relaxed);
     m_gtcrnRing.fill(0.0f);
     m_gtcrnWritePos = 0;
     m_gtcrnReadPos = 0;
     m_gtcrnPrimed = false;
     m_gtcrnSlowFrames = 0;
-    m_gtcrnThrottled = false;
+    m_gtcrnThrottled.store(false, std::memory_order_relaxed);
 
 #if DS_ENHANCER_HAS_SHERPA
     BundledGtcrnState &st = gtcrnState();
@@ -375,22 +412,22 @@ void AudioEnhancer::reset()
 
 void AudioEnhancer::upsample8kTo16k(const float *in8k, size_t count8k, float *out16k)
 {
+    // 2x polyphase upsample with kRxInterp (even/odd taps).
     for (size_t i = 0; i < count8k; ++i) {
-        // Shift 8-sample history: m_upHist[0] is x[n], m_upHist[3] is x[n-3], m_upHist[4] is x[n-4]
-        for (size_t k = 7; k > 0; --k) {
+        for (size_t k = 63; k > 0; --k) {
             m_upHist[k] = m_upHist[k - 1];
         }
         m_upHist[0] = in8k[i];
 
-        // Polyphase branch 0 (earlier in time, t = n - 3.5): midpoint between m_upHist[4] (n-4) and m_upHist[3] (n-3)
-        const float midpoint = kHalfBand0 * (m_upHist[0] + m_upHist[7])
-                             + kHalfBand1 * (m_upHist[1] + m_upHist[6])
-                             + kHalfBand2 * (m_upHist[2] + m_upHist[5])
-                             + kHalfBand3 * (m_upHist[3] + m_upHist[4]);
-        out16k[2 * i] = midpoint;
-
-        // Polyphase branch 1 (later in time, t = n - 3.0): exact integer delay tap m_upHist[3]
-        out16k[2 * i + 1] = m_upHist[3];
+        float even = 0.0f;
+        float odd = 0.0f;
+        for (int j = 0; j < 63; ++j) {
+            even += rxInterpTap(2 * j) * m_upHist[j];
+            odd  += rxInterpTap(2 * j + 1) * m_upHist[j];
+        }
+        even += rxInterpTap(126) * m_upHist[63];
+        out16k[2 * i] = even;
+        out16k[2 * i + 1] = odd;
     }
 }
 
@@ -461,11 +498,10 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
 
     const float vhRatio = m_rxVoiceEnv / (m_rxHissEnv + 25.0f);
 
-    // Noise-like frame: weak voiced-formant dominance. Only such frames may teach the noise floor, so a long
-    // continuous over with no pauses can never drag the floor up into the speech level.
+    // Noise-like frame: weak voiced-formant dominance. Only such frames may teach the noise
     const bool noiseLike = (vhRatio < 1.25f);
 
-    // 2. Adaptive post-AGC noise floor tracker (rolling 600 ms minimum-statistics window of noise-like frames)
+    // 2. Adaptive post-AGC noise floor tracker (rolling 600 ms minimum-statistics window of
     if (noiseLike && frameRms > 25.0f && frameRms < m_agcMinWinRms) {
         m_agcMinWinRms = frameRms;
     }
@@ -485,8 +521,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         m_agcNoiseFloor = 0.94f * m_agcNoiseFloor + 0.06f * frameRms;
     }
 
-    // Hard ceiling relative to the tracked speech level: the floor can never exceed 40% of the talker's
-    // running speech RMS, so the expander thresholds always stay well below the voice.
+    // Hard ceiling relative to the tracked speech level: the floor can never exceed 40%
     const float floorCeiling = std::clamp(m_agcSlowRms * 0.40f, 300.0f, 2000.0f);
     m_agcNoiseFloor = std::clamp(m_agcNoiseFloor, 120.0f, floorCeiling);
 
@@ -513,7 +548,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         m_agcSlowRms = std::clamp(m_agcSlowRms, 800.0f, 24000.0f);
     }
 
-    // 4. Syllabic Downward Expander (-13 dB = 0.22x floor between words; still never a hard gate)
+    // 4. Syllabic Downward Expander (-13 dB = 0.22x floor between words; still
     constexpr float kMinExpFloor = 0.22f;
     float targetExp = 1.0f;
     if (!speechActive) {
@@ -522,8 +557,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         targetExp = kMinExpFloor + (1.0f - kMinExpFloor) * (ratio * ratio);
     }
 
-    // Attack: frame stats are known up-front, so a detected word onset opens fully within the first 4 ms
-    // (32 samples) of the frame instead of ramping across all 20 ms. Release: ~80 ms to avoid pumping.
+    // Attack: frame stats are known up-front, so a detected word onset opens fully within
     const float startExp = m_rxExpanderGain;
     float endExp;
     size_t attackLen = n;
@@ -538,10 +572,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
     m_rxExpanderGain = endExp;
     const float stepExp = (endExp - startExp) / static_cast<float>(attackLen);
 
-    // 5. Phase-Coherent Dynamic High-Shelf De-Hisser (> 2.0 kHz)
-    //    Uses exact identity y[n] = alpha * x[n] + (1 - alpha) * lp[n]:
-    //    - During clear speech & sibilant consonants (alpha -> 0.96): 0 dB flat, 100% open top end.
-    //    - During unvoiced vocoder quantization hiss / noisy tails (alpha -> 0.24): smooth -10 dB high-shelf.
+    // Soft de-hiss above 2 kHz.
     const float snrNorm = std::clamp((frameRms - m_agcNoiseFloor * 1.15f) / std::max(450.0f, m_agcNoiseFloor * 2.4f), 0.0f, 1.0f);
     const float vhNorm  = std::clamp((vhRatio - 0.65f) / 1.65f, 0.0f, 1.0f);
     const float clarityFactor = speechActive ? std::max(vhNorm, snrNorm * 0.85f) : (vhNorm * 0.25f);
@@ -556,7 +587,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
     m_rxDeHissAlpha = endAlpha;
     const float stepAlpha = (endAlpha - startAlpha) * invN;
 
-    // 6. Sample-by-sample zero-latency processing: Dynamic De-Hisser + Light Vocal Clarity EQ + Soft Expander
+    // 6. Sample-by-sample zero-latency processing: Dynamic De-Hisser + Light Vocal Clarity
     for (size_t i = 0; i < n; ++i) {
         const float x = work8k[i];
         m_rxDeHissState += 0.36f * (x - m_rxDeHissState);
@@ -573,8 +604,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         samples8k[i] = y * gExp;
     }
 
-    // 7. Long-over robustness: flush denormals in every recursive state (prevents CPU spikes after long quiet
-    //    tails) and recover instantly if any state ever becomes non-finite (output falls back to clean pass-through).
+    // 7. Long-over robustness: flush denormals in every recursive state (prevents CPU spikes
     auto flush = [](float &v) {
         if (!std::isfinite(v)) { v = 0.0f; return false; }
         if (std::fabs(v) < 1e-12f) { v = 0.0f; }
@@ -614,8 +644,7 @@ void AudioEnhancer::processRx8kInPlace(int16_t *pcm8k, size_t count, bool agcEna
         return;
     }
 
-    // RX is kept 100% true-to-source (no RX noise reduction, no RX EQ filters, no RX gating)
-    // so operators hear the exact unaltered signal transmitted by others and on Parrot Echo Tests.
+    // RX is kept 100% true-to-source (no RX noise reduction, no RX EQ filters, no
     if (!agcEnabled && std::fabs(outputVolume - 1.0f) < 1e-4f) {
         return;
     }
@@ -751,8 +780,7 @@ bool AudioEnhancer::runTxNeuralDenoiser16k(float *samples16k, size_t count16k)
     if (!m_gtcrnPrimed) {
         m_gtcrnWritePos = 0;
         m_gtcrnReadPos = 0;
-        // Pre-warm GTCRN internal STFT window with 256 zero samples and prime ring with 320 samples
-        // so the 320-vs-256 hop cycle never underflows on any frame.
+        // Pre-warm GTCRN internal STFT window with 256 zero samples and prime ring with 320
         std::array<float, 256> zeroWarm{};
         {
             QMutexLocker lock(&st.txCallMutex);
@@ -826,6 +854,57 @@ float AudioEnhancer::measureTxNeuralSpeechConfidence16k(const float *samples16k,
         return -1.0f;
     }
 
+    // Hand the frame to the worker (replacing any frame it has not picked up
+    {
+        QMutexLocker lock(&m_neuralJobMutex);
+        m_neuralPendingFrame.assign(samples16k, samples16k + std::min<size_t>(count16k, 640));
+        m_neuralPendingRms = rawRms;
+        m_neuralPendingValid = true;
+        bool expected = false;
+        if (m_neuralWorkerBusy.compare_exchange_strong(expected, true)) {
+            QThreadPool::globalInstance()->start([this]() { neuralSidechainWorker(); });
+        }
+    }
+    return m_neuralConfLatest.load(std::memory_order_relaxed);
+#else
+    (void)samples16k;
+    (void)count16k;
+    (void)rawRms;
+    return -1.0f;
+#endif
+}
+
+void AudioEnhancer::neuralSidechainWorker()
+{
+    for (;;) {
+        std::vector<float> frame;
+        float rms = 0.0f;
+        {
+            QMutexLocker lock(&m_neuralJobMutex);
+            if (!m_neuralPendingValid || m_neuralShutdown.load(std::memory_order_relaxed)) {
+                m_neuralWorkerBusy.store(false, std::memory_order_release);
+                return;
+            }
+            frame.swap(m_neuralPendingFrame);
+            rms = m_neuralPendingRms;
+            m_neuralPendingValid = false;
+        }
+        const float conf = runTxNeuralConfidenceSync(frame.data(), frame.size(), rms);
+        m_neuralConfLatest.store(conf, std::memory_order_relaxed);
+    }
+}
+
+float AudioEnhancer::runTxNeuralConfidenceSync(const float *samples16k, size_t count16k, float rawRms)
+{
+#if DS_ENHANCER_HAS_SHERPA
+    if (m_role != RoleTx || m_gtcrnThrottled || count16k == 0) {
+        return -1.0f;
+    }
+    BundledGtcrnState &st = gtcrnState();
+    if (!st.ready.load(std::memory_order_acquire) || !st.txDenoiser) {
+        return -1.0f;
+    }
+
     std::array<float, 640> normIn{};
     const size_t n = std::min<size_t>(count16k, normIn.size());
     for (size_t i = 0; i < n; ++i) {
@@ -880,7 +959,7 @@ float AudioEnhancer::measureTxNeuralSpeechConfidence16k(const float *samples16k,
     if (!valid) {
         return -1.0f;
     }
-    // Return neural speech-to-total ratio in [0.0 .. 1.0], scaled to zero when denoised output is below mic floor
+    // Return neural speech-to-total ratio in [0.0 .. 1.0], scaled to zero when
     if (denRms < 95.0f) {
         return 0.0f;
     }
@@ -903,28 +982,27 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     const bool hdOn = isHdUpscaleEnabled();
     const bool levelerOn = isMicLevelerEnabled();
 
-    // 1. Form clean 8 kHz frame via 2-sample anti-alias average (preserving 100% linear phase for IMBE/AMBE!)
-    //    Never replace the waveform with STFT-warped neural output or steep low-pass filters, because
-    //    imbe_vocoder's v_uv_det() requires intact time-domain harmonic phase and full 3.8 kHz upper-formant
-    //    energy to classify speech as Voiced (Vl=1) rather than Unvoiced white noise (Vl=0).
+    // 1. 16 kHz: 4th-order (LR4) 200 Hz high-pass. Phone mics used close to the
     std::array<float, 320> hp16k{};
     float raw16kSq = 0.0f;
     for (size_t i = 0; i < 320; ++i) {
-        const float s = m_txHpf2.process(in16k[i]);
+        const float s = m_txHpf.process(m_txHpf2.process(in16k[i]));
         hp16k[i] = s;
         raw16kSq += s * s;
     }
     const float raw16kRms = std::sqrt(raw16kSq / 320.0f);
 
+    // 2. 16 kHz -> 8 kHz with the linear-phase 16-tap half-band decimator (flat to
     std::array<float, 160> work8k{};
+    downsample16kTo8k(hp16k.data(), 320, work8k.data());
+
     float sumSq = 0.0f;
     float peak = 0.0f;
     float voiceSq = 0.0f;
     float hissSq = 0.0f;
 
     for (size_t i = 0; i < 160; ++i) {
-        float x = 0.5f * (in16k[2 * i] + in16k[2 * i + 1]);
-        x = m_txHpf.process(x);
+        float x = work8k[i];
 
         const float vBand = m_txVoiceBandDetector.process(x);
         const float hBand = m_txHissBandDetector.process(x);
@@ -936,8 +1014,7 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
         hissSq  += hBand * hBand;
 
         if (hdOn) {
-            // Phase-clean 8 kHz HD Voice contour (+1.2 dB @ 220 Hz warmth + +1.8 dB @ 2000 Hz articulation)
-            x = m_txWarmthEq.process(x);
+            // Articulation contour only (+3.5 dB @ 2.3 kHz). The former +1.2 dB @ 220
             x = m_txPresenceEq.process(x);
         }
 
@@ -955,7 +1032,7 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     const float vhRatio  = voiceRms / (hissRms + 10.0f);
     const float crest    = peak / (rms + 1.0f);
 
-    // 2. Non-deadlocking Adaptive Noise Floor Tracker (tracks ambient room/fan noise up to 3500 RMS)
+    // 3. Non-deadlocking Adaptive Noise Floor Tracker (tracks ambient room/fan noise up to
     ++m_txFrameCount;
     if (rms < m_txMinWinRms) {
         m_txMinWinRms = rms;
@@ -979,60 +1056,47 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     }
     m_txNoiseFloor = std::clamp(m_txNoiseFloor, 60.0f, 3200.0f);
 
-    // 3. Neural AI (GTCRN sidechain) & Natural VAD Decision
+    // Neural VAD sidechain (async).
     float neuralConf = -1.0f;
     if (mode == NoiseNeural) {
         neuralConf = measureTxNeuralSpeechConfidence16k(hp16k.data(), 320, raw16kRms);
     }
 
-    const float gateOpen  = std::max(280.0f, m_txNoiseFloor * 2.15f);
-    const float gateClose = std::max(190.0f, m_txNoiseFloor * 1.50f);
+    const float gateOpen  = std::max(220.0f, m_txNoiseFloor * 2.0f);
+    const float gateHold  = std::max(150.0f, m_txNoiseFloor * 1.3f);
+    constexpr int kHangFrames = 15; // 300 ms
 
     bool voiceActive = false;
     if (neuralConf >= 0.0f) {
-        // Neural AI mode: require both GTCRN neural speech confidence and acoustic voice-band energy
-        if (neuralConf >= 0.38f && rms >= std::max(220.0f, m_txNoiseFloor * 1.65f) && vhRatio >= 1.10f) {
+        if ((neuralConf >= 0.38f && rms >= std::max(180.0f, m_txNoiseFloor * 1.5f))
+            || (rms >= gateOpen * 1.6f)) {
             voiceActive = true;
-            m_txHangCounter = 5; // 100 ms syllable tail hang time
+            m_txHangCounter = kHangFrames;
         } else if (m_txHangCounter > 0) {
             --m_txHangCounter;
-            voiceActive = (neuralConf >= 0.24f && rms >= gateClose);
-            if (!voiceActive) {
-                m_txHangCounter = 0;
-            }
+            voiceActive = (rms >= gateHold);
         }
     } else {
-        // Natural mode (or fallback if GTCRN is still warming up)
-        if (rms >= gateOpen && vhRatio >= 1.25f) {
+        const bool loud = rms >= gateOpen;
+        const bool notSteadyNoise = (vhRatio >= 0.55f) || (rms >= gateOpen * 2.0f) || (crest >= 3.4f);
+        if (loud && notSteadyNoise) {
             voiceActive = true;
-            m_txHangCounter = 5;
+            m_txHangCounter = kHangFrames;
         } else if (m_txHangCounter > 0) {
             --m_txHangCounter;
-            voiceActive = (rms >= gateClose && vhRatio >= 1.05f);
-            if (!voiceActive) {
-                m_txHangCounter = 0;
-            }
+            voiceActive = (rms >= gateHold);
         }
     }
 
-    // Smooth raised-cosine gate attack/release (4 ms attack on word onset so initial consonant is never
-    // clipped or stepped; smooth 20 ms release into non-speech pauses to prevent click at gate close).
-    float targetExp = 1.0f;
-    if (!voiceActive && (mode != NoiseOff || levelerOn)) {
-        targetExp = 0.0f;
+    // Soft expander; closed floor is -12 dB.
+    constexpr float kExpanderFloor = 0.25f; // -12 dB
+    const bool expanderOn = (mode != NoiseOff || levelerOn);
+    const float targetExp = (!expanderOn || voiceActive) ? 1.0f : kExpanderFloor;
+    if (m_txExpanderGain < kExpanderFloor) {
+        m_txExpanderGain = targetExp; // first frame after reset: start where we need to be
     }
-    const float startExp = m_txExpanderGain;
-    const float endExp   = (targetExp >= 0.5f) ? 1.0f : 0.0f;
-    m_txExpanderGain = endExp;
-
-    if (startExp <= 0.001f && endExp <= 0.001f) {
-        m_txAntiAliasLpf1.z1 = 0.0f;
-        m_txAntiAliasLpf1.z2 = 0.0f;
-        m_txAntiAliasLpf2.z1 = 0.0f;
-        m_txAntiAliasLpf2.z2 = 0.0f;
-        std::memset(out8k, 0, 160 * sizeof(int16_t));
-        return;
-    }
+    constexpr float kExpAttack  = 1.0f - 0.9594f;  // 3 ms @ 8 kHz
+    constexpr float kExpRelease = 1.0f - 0.99896f; // 120 ms @ 8 kHz
 
     float desiredGain = 1.0f;
     if (levelerOn && voiceActive) {
@@ -1052,19 +1116,18 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
                                                       : (0.88f * m_txGain + 0.12f * desiredGain))
                           : 1.0f;
     m_txGain = endGain;
-
-    const size_t expRampLen = (endExp > startExp) ? 32U : 160U;
     const float stepGain = (endGain - startGain) / 160.0f;
 
+    // Quiet comfort noise so AMBE does not emit hard silence frames.
+    constexpr float kComfortAmp = 43.0f; // uniform +-43 -> ~25 RMS
+
     for (size_t i = 0; i < 160; ++i) {
-        float gExp = endExp;
-        if (startExp != endExp && i < expRampLen) {
-            const float prog = static_cast<float>(i) / static_cast<float>(expRampLen);
-            const float rc = 0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * prog));
-            gExp = startExp + (endExp - startExp) * rc;
-        }
+        const float a = (targetExp > m_txExpanderGain) ? kExpAttack : kExpRelease;
+        m_txExpanderGain += a * (targetExp - m_txExpanderGain);
         const float gLvl = startGain + static_cast<float>(i) * stepGain;
-        const float y = work8k[i] * (gLvl * gExp);
+        m_txNoiseSeed = m_txNoiseSeed * 1664525u + 1013904223u;
+        const float comfort = (static_cast<float>((m_txNoiseSeed >> 8) & 0xFFFF) * (1.0f / 32768.0f) - 1.0f) * kComfortAmp;
+        const float y = work8k[i] * (gLvl * m_txExpanderGain) + comfort;
         out8k[i] = static_cast<int16_t>(lrintf(softLimitSample(y, 26000.0f, 32000.0f)));
     }
 }

@@ -21,10 +21,167 @@
 #if defined(Q_OS_IOS) && !defined(Q_OS_IOS_APP_EXTENSION)
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <UserNotifications/UserNotifications.h>
 
 static DSNotificationTapCallback g_tapCallback = nullptr;
 static DSNotificationDeliveredCallback g_deliveredCallback = nullptr;
+static DSSmsNotificationTapCallback g_smsTapCallback = nullptr;
+static DSKeyboardHeightCallback g_kbHeightCallback = nullptr;
+static bool g_chatKeyboardMode = false;
+static __weak UIWindow *g_savedKbWindow = nil;
+static UIGestureRecognizer *g_savedKbListener = nil;
+
+static UIWindow *ds_activeWindow(void)
+{
+    if (@available(iOS 15.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            for (UIWindow *w in ws.windows) {
+                if (w.isKeyWindow) return w;
+            }
+            if (ws.windows.count > 0) return ws.windows.firstObject;
+        }
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [UIApplication sharedApplication].keyWindow;
+#pragma clang diagnostic pop
+}
+
+static void ds_resetRootSublayerTransform(UIWindow *win)
+{
+    if (!win || !win.rootViewController || !win.rootViewController.view) return;
+    CALayer *layer = win.rootViewController.view.layer;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [layer removeAnimationForKey:@"sublayerTransform"];
+    if (!CATransform3DIsIdentity(layer.sublayerTransform)) {
+        layer.sublayerTransform = CATransform3DIdentity;
+    }
+    [CATransaction commit];
+}
+
+static void ds_syncChatKeyboardModeOnMain(void)
+{
+    UIWindow *win = ds_activeWindow();
+    Class kbClass = NSClassFromString(@"QIOSKeyboardListener");
+    if (g_chatKeyboardMode) {
+        if (win && kbClass) {
+            NSArray<UIGestureRecognizer *> *recognizers = [win.gestureRecognizers copy];
+            for (UIGestureRecognizer *gr in recognizers) {
+                if ([gr isKindOfClass:kbClass]) {
+                    g_savedKbListener = gr;
+                    g_savedKbWindow = win;
+                    [win removeGestureRecognizer:gr];
+                }
+            }
+        }
+        ds_resetRootSublayerTransform(win);
+    } else {
+        if (g_savedKbListener && !g_savedKbListener.view) {
+            UIWindow *targetWin = g_savedKbWindow ?: win;
+            if (targetWin) {
+                [targetWin addGestureRecognizer:g_savedKbListener];
+            }
+        }
+    }
+}
+
+@interface DSKeyboardObserver : NSObject
++ (instancetype)sharedObserver;
+@end
+
+@implementation DSKeyboardObserver
+
++ (instancetype)sharedObserver
+{
+    static DSKeyboardObserver *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[DSKeyboardObserver alloc] init];
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserver:instance
+               selector:@selector(handleKeyboardNotification:)
+                   name:UIKeyboardWillShowNotification
+                 object:nil];
+        [nc addObserver:instance
+               selector:@selector(handleKeyboardNotification:)
+                   name:UIKeyboardDidShowNotification
+                 object:nil];
+        [nc addObserver:instance
+               selector:@selector(handleKeyboardNotification:)
+                   name:UIKeyboardWillChangeFrameNotification
+                 object:nil];
+        [nc addObserver:instance
+               selector:@selector(handleKeyboardNotification:)
+                   name:UIKeyboardWillHideNotification
+                 object:nil];
+        [nc addObserver:instance
+               selector:@selector(handleKeyboardNotification:)
+                   name:UIKeyboardDidHideNotification
+                 object:nil];
+        [nc addObserver:instance
+               selector:@selector(handleAppOrWindowActive:)
+                   name:UIApplicationDidBecomeActiveNotification
+                 object:nil];
+        [nc addObserver:instance
+               selector:@selector(handleAppOrWindowActive:)
+                   name:UIWindowDidBecomeKeyNotification
+                 object:nil];
+    });
+    return instance;
+}
+
+- (void)handleAppOrWindowActive:(NSNotification *)note
+{
+    (void)note;
+    if (g_chatKeyboardMode) {
+        ds_syncChatKeyboardModeOnMain();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (g_chatKeyboardMode) {
+                ds_syncChatKeyboardModeOnMain();
+            }
+        });
+    }
+}
+
+- (void)handleKeyboardNotification:(NSNotification *)note
+{
+    if (g_chatKeyboardMode) {
+        ds_syncChatKeyboardModeOnMain();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (g_chatKeyboardMode) {
+                ds_syncChatKeyboardModeOnMain();
+            }
+        });
+    }
+    if (!g_kbHeightCallback) return;
+    NSString *name = note.name ?: @"";
+    if ([name isEqualToString:UIKeyboardWillHideNotification] ||
+        [name isEqualToString:UIKeyboardDidHideNotification]) {
+        g_kbHeightCallback(0.0);
+        return;
+    }
+    NSDictionary *info = note.userInfo;
+    NSValue *endVal = info[UIKeyboardFrameEndUserInfoKey];
+    if (!endVal) return;
+    CGRect kbScreen = [endVal CGRectValue];
+    UIWindow *win = ds_activeWindow();
+    CGRect refBounds = win ? win.bounds : [UIScreen mainScreen].bounds;
+    CGRect kbLocal = (win && win.screen)
+        ? [win convertRect:kbScreen fromCoordinateSpace:win.screen.coordinateSpace]
+        : kbScreen;
+    CGFloat overlap = CGRectGetMaxY(refBounds) - CGRectGetMinY(kbLocal);
+    if (overlap < 0.0 || CGRectIsEmpty(kbScreen)) {
+        overlap = 0.0;
+    }
+    g_kbHeightCallback(static_cast<double>(overlap));
+}
+
+@end
 
 @interface DSNotificationCenterDelegate : NSObject <UNUserNotificationCenterDelegate>
 + (instancetype)sharedDelegate;
@@ -69,6 +226,10 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     (void)center;
     NSDictionary *userInfo = response.notification.request.content.userInfo;
     NSString *netId = [userInfo objectForKey:@"netId"];
+    NSString *smsThreadId = [userInfo objectForKey:@"smsThreadId"];
+    if (smsThreadId && g_smsTapCallback) {
+        g_smsTapCallback([smsThreadId UTF8String]);
+    }
     if (netId && g_tapCallback) {
         g_tapCallback([netId UTF8String]);
     }
@@ -178,11 +339,69 @@ void ios_notifications_replace_scheduled_alerts(const std::vector<DSScheduledAle
     }];
 }
 
+void ios_notifications_set_sms_tap_callback(DSSmsNotificationTapCallback tapCb)
+{
+    g_smsTapCallback = tapCb;
+}
+
+void ios_notifications_post_sms_alert(const QString &threadId,
+                                      const QString &title,
+                                      const QString &body)
+{
+    if (threadId.isEmpty()) {
+        return;
+    }
+    UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+    content.title = title.toNSString();
+    content.body = body.toNSString();
+    content.sound = [UNNotificationSound defaultSound];
+    content.userInfo = @{ @"smsThreadId": threadId.toNSString() };
+
+    NSString *safeThread = [threadId.toNSString() stringByReplacingOccurrencesOfString:@":" withString:@"-"];
+    NSString *identifier = [NSString stringWithFormat:@"droidstar.sms.%@.%lld",
+                            safeThread,
+                            (long long)([[NSDate date] timeIntervalSince1970] * 1000.0)];
+    UNNotificationRequest *request =
+        [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
+    [[UNUserNotificationCenter currentNotificationCenter]
+        addNotificationRequest:request
+        withCompletionHandler:^(NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"[DroidStar][Notifications] Failed to post SMS alert: %@",
+                      error.localizedDescription);
+            }
+        }];
+}
+
+void ios_keyboard_observer_init(DSKeyboardHeightCallback cb)
+{
+    g_kbHeightCallback = cb;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [DSKeyboardObserver sharedObserver];
+    });
+}
+
+void ios_set_chat_keyboard_mode(bool active)
+{
+    g_chatKeyboardMode = active;
+    if ([NSThread isMainThread]) {
+        ds_syncChatKeyboardModeOnMain();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ds_syncChatKeyboardModeOnMain();
+        });
+    }
+}
+
 #else
 
 void ios_notifications_init(DSNotificationTapCallback, DSNotificationDeliveredCallback) {}
 void ios_notifications_request_permission(DSNotificationPermissionCallback cb) { if (cb) cb(true); }
 void ios_notifications_check_permission(DSNotificationPermissionCallback cb) { if (cb) cb(true); }
 void ios_notifications_replace_scheduled_alerts(const std::vector<DSScheduledAlert> &) {}
+void ios_notifications_set_sms_tap_callback(DSSmsNotificationTapCallback) {}
+void ios_notifications_post_sms_alert(const QString &, const QString &, const QString &) {}
+void ios_keyboard_observer_init(DSKeyboardHeightCallback) {}
+void ios_set_chat_keyboard_mode(bool) {}
 
 #endif

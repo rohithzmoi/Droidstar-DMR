@@ -79,6 +79,12 @@ void XRF::process_udp()
 		m_audio->set_output_volume(m_pendingOutVol);
 	}
 
+	// Voice frames can arrive before (or without) the connect ACK, e.g. on a reconnect
+	if (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio) {
+		emit update(m_modeinfo);
+		return;
+	}
+
 	if((buf.size() == 56) && (!memcmp(buf.data(), "DSVT", 4)) ){
 		uint16_t streamid = (buf.data()[12] << 8) | (buf.data()[13] & 0xff);
 		if( (m_modeinfo.streamid != 0) && (streamid != m_modeinfo.streamid) ){
@@ -103,6 +109,7 @@ void XRF::process_udp()
 
 			if(!m_rxtimer->isActive()){
 				m_audio->start_playback();
+				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
 			}
 
@@ -140,12 +147,14 @@ void XRF::process_udp()
 			m_modeinfo.streamid = streamid;
 			if(!m_rxtimer->isActive()){
 				m_audio->start_playback();
+				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
 			}
 		}
 		if(!m_tx && ( (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_IDLE) )){
 			if(!m_rxtimer->isActive()){
 				m_audio->start_playback();
+				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
 			}
 			m_modeinfo.stream_state = STREAM_NEW;
@@ -608,7 +617,8 @@ void XRF::process_rx_data()
 		}
 	}
 
-	if((!m_tx) && (m_rxcodecq.size() > 8) ){
+	if((!m_tx) && rxJitterReady(9)){
+		m_rxConcealRun = 0;
 		for(int i = 0; i < 9; ++i){
 			ambe[i] = m_rxcodecq.dequeue();
 		}
@@ -633,12 +643,19 @@ void XRF::process_rx_data()
 			emit update_output_level(m_audio->level());
 		}
 	}
+	else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && rxShouldConceal()){
+		// Late/missing network frame: vocoder lost-frame repeat instead of starving the sink
+		m_mbevocoder->conceal_2400x1200(pcm);
+		m_audio->write(pcm, 160);
+		emit update_output_level(m_audio->level());
+	}
 	else if ( (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_LOST) ){
 		m_rxtimer->stop();
 		m_audio->stop_playback();
 		m_rxwatchdog = 0;
 		m_modeinfo.streamid = 0;
 		m_rxcodecq.clear();
+		rxJitterReset();
 		qDebug() << "XRF playback stopped";
 		m_modeinfo.stream_state = STREAM_IDLE;
 		return;

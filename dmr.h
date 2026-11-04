@@ -21,6 +21,7 @@
 #include "mode.h"
 #include "DMRDefines.h"
 #include "cbptc19696.h"
+#include "DmrDataCodec.h"
 
 class DMR : public Mode
 {
@@ -34,6 +35,12 @@ public:
     bool is_odtp() const { return m_odtp; }
     bool is_tgif() const { return m_isTgif; }
     uint8_t * get_eot();
+public slots:
+    void send_sms(int msgId, uint32_t dstId, const QString &text, bool isGroup, int format);
+signals:
+    void sms_received(uint32_t srcId, uint32_t dstId, const QString &text, bool isGroup, const QString &format);
+    void sms_send_status(int msgId, int status, const QString &detail);
+    void sms_ack_received(uint32_t srcId, bool success);
 private slots:
     void process_udp();
     void process_rx_data();
@@ -47,6 +54,7 @@ private slots:
     void dmrpc_state_changed(int p);
     void relink_talkgroup();
     void onAutoLinkTick();
+    void process_sms_tx_queue();
     void cc_changed(int cc) { m_txcc = cc; m_modeinfo.cc = cc; }
     void slot_changed(int s) { m_txslot = s + 1; }
     void send_frame();
@@ -101,6 +109,15 @@ private:
     bool m_data[72U];
     QString m_options;
 
+    struct PendingSmsBurst {
+        int msgId { -1 };
+        bool isLastBurst { false };
+        QByteArray dmrdFrame;
+    };
+    QQueue<PendingSmsBurst> m_smsTxQueue;
+    QTimer *m_smsTxTimer { nullptr };
+    DmrSmsAssembler m_smsAssembler;
+
     // BrandMeister Open DMR Terminal Protocol (ODTP / Rewind) state
     bool m_odtp;
     bool m_isTgif;
@@ -144,6 +161,7 @@ private:
     void schedule_group_link(bool force);
     void request_tgif_talkgroup_switch(uint32_t targetTg, bool forceFallback = false);
     bool shouldAcceptRxPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) const;
+    bool shouldAcceptRxDataPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) const;
 
     void send_odtp_packet(uint16_t type, uint16_t flags, const void *payload, uint16_t length, bool advanceSeq = true);
     void send_odtp_keepalive();

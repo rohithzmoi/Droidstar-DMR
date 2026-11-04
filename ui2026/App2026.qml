@@ -67,6 +67,8 @@ ApplicationWindow {
         property string transcriptionEngine: "apple"
         property string transcriptionLanguage: "auto"
         property string transcriptionModel: "base"
+        property string smsRestoreTg: ""
+        property bool smsRestorePc: false
     }
 
     // Material base
@@ -92,7 +94,8 @@ ApplicationWindow {
     property var logHandlerRef: (typeof logHandler !== "undefined") ? logHandler : null
     property var liveActivityRef: (typeof liveActivity !== "undefined") ? liveActivity : null
     property var transcriptionEngineRef: (typeof transcriptionEngine !== "undefined") ? transcriptionEngine : null
-    // Engine turn ids restart at 0 each launch; logged turns are keyed by session so a new turn never overwrites an old one
+    property var smsManagerRef: (typeof smsManager !== "undefined") ? smsManager : null
+    // Engine turn ids restart at 0 each launch; logged turns are keyed
     readonly property string _transcriptSessionId: Date.now().toString(36)
     property var netReminderManagerRef: (typeof netReminderManager !== "undefined") ? netReminderManager : null
 
@@ -106,9 +109,7 @@ ApplicationWindow {
     property bool initialized: false
     property bool initializing: false
 
-    // ─────────────────────────────────────────────────────────
-    // SAFE AREA (notch / Dynamic Island / home indicator / landscape sensor housing)
-    // ─────────────────────────────────────────────────────────
+    // SAFE AREA (notch / Dynamic Island / home indicator / landscape sensor
     QtObject {
         id: safeAreaObj
         property real top: 0
@@ -144,17 +145,16 @@ ApplicationWindow {
     onWidthChanged: safeAreaTimer.restart()
     onHeightChanged: safeAreaTimer.restart()
 
-    // ─────────────────────────────────────────────────────────
     // RESPONSIVE NAVIGATION
-    // ─────────────────────────────────────────────────────────
-    // Tablets/desktop only: a phone in landscape is wide but too short for a permanent sidebar.
+    // Tablets/desktop only: a phone in landscape is wide but too short
     readonly property bool navDocked: width >= t.dockedNavBreakpoint && height >= 560
     readonly property bool compact: width < 400
     onNavDockedChanged: if (!navDocked) navDrawer.close()
 
-    readonly property var pageKeys: ["main", "scan", "settings", "qso", "nets", "log", "hosts", "about"]
+    readonly property var pageKeys: ["main", "scan", "messages", "settings", "qso", "nets", "log", "hosts", "about"]
     property string currentPage: "main"
     property var _visited: ["main"]
+    property string pendingMessageThread: ""
     property double _lastScanHopMs: 0
     property double _lastRxEndMs: 0
     // Manual Tune holds the scanner here so a live update cannot hop away immediately.
@@ -181,6 +181,9 @@ ApplicationWindow {
 
     function navigate(key) {
         if (pageKeys.indexOf(key) < 0) return
+        if (window.smsManagerRef && typeof window.smsManagerRef.setChatKeyboardMode === "function") {
+            window.smsManagerRef.setChatKeyboardMode(key === "messages")
+        }
         _markVisited(key)
         window.currentPage = key
         if (!navDocked) navDrawer.close()
@@ -191,7 +194,85 @@ ApplicationWindow {
         toaster.show(message, actionText, action, kind)
     }
 
-    function connectDmrShortcut(preferredHost) {
+    function openMessageTo(dmrId, callsign, isGroup) {
+        if (!window.smsManagerRef) return
+        var id = parseInt(dmrId || "0") || 0
+        if (id <= 0 && callsign) {
+            var cleanCs = window._extractBaseCallsign(callsign)
+            if (cleanCs !== "")
+                id = parseInt(window.smsManagerRef.resolveTarget(cleanCs, !!isGroup).id || "0") || 0
+            if (id <= 0)
+                id = parseInt(window.smsManagerRef.resolveTarget(String(callsign), !!isGroup).id || "0") || 0
+        }
+        if (id <= 0) {
+            window.notify(qsTr("No DMR ID is available for this station."), "", null, "warning")
+            return
+        }
+        var key = window.smsManagerRef.threadKeyFor(id, !!isGroup)
+        window.pendingMessageThread = key
+        window.navigate("messages")
+        window.smsManagerRef.openThread(key)
+    }
+
+    // SMS standby: private call to our own ID, so no voice talkgroup
+    property bool smsStandbyActive: false
+    property string smsStandbyRestoreTg: ""
+    property bool smsStandbyRestorePc: false
+
+    function _rememberHomeTarget() {
+        if (window.smsStandbyActive) return
+        var ownId = String(parseInt(appState.dmrid) || "")
+        var cur = String(appState.dmrtgid || "")
+        window.smsStandbyRestoreTg = (cur !== ownId) ? cur : ""
+        window.smsStandbyRestorePc = !!appState.privateCall
+        controlSettings.smsRestoreTg = window.smsStandbyRestoreTg
+        controlSettings.smsRestorePc = window.smsStandbyRestorePc
+    }
+
+    function _forgetSmsStandby() {
+        window.smsStandbyActive = false
+        controlSettings.smsRestoreTg = ""
+        controlSettings.smsRestorePc = false
+    }
+
+    function _restoreHomeTarget() {
+        if (!window.smsStandbyActive) return
+        var tg = window.smsStandbyRestoreTg
+        var pc = window.smsStandbyRestorePc
+        window._forgetSmsStandby()
+        if (!droidstar || tg === "") return
+        appState.privateCall = pc
+        appState.dmrtgid = tg
+        droidstar.set_dmr_pc(pc ? 1 : 0)
+        droidstar.set_dmrtgid(tg)
+        droidstar.tgid_text_changed(tg)
+    }
+
+    function setDmrSmsStandby() {
+        if (!droidstar) return
+        var ownId = String(parseInt(appState.dmrid) || 9990)
+        window._rememberHomeTarget()
+        appState.privateCall = true
+        appState.dmrtgid = ownId
+        droidstar.set_dmr_pc(1)
+        droidstar.set_dmrtgid(ownId)
+        droidstar.tgid_text_changed(ownId)
+        window.smsStandbyActive = true
+    }
+
+    function leaveSmsStandby(groupTg) {
+        var tg = String(groupTg || window.smsStandbyRestoreTg || "")
+        var pc = groupTg ? false : window.smsStandbyRestorePc
+        window._forgetSmsStandby()
+        if (tg === "" || !(parseInt(tg) > 0)) {
+            notify(qsTr("No voice talkgroup to link. Pick one on the Home page."),
+                   qsTr("Home"), function() { window.navigate("main") }, "info")
+            return
+        }
+        window.quickSwitchToTalkgroup(tg, false, pc)
+    }
+
+    function connectDmrShortcut(preferredHost, targetId, isGroup) {
         if (!droidstar) return
         if (appState.mode === "DMR" && (appState.connected || appState.connecting)) {
             window.connectOrDisconnect()
@@ -201,11 +282,30 @@ ApplicationWindow {
             if (appState.txActive) window.txSet(false)
             droidstar.process_connect()
         }
-        if (appState.mode !== "DMR") {
-            window.setMode("DMR")
-        }
-        if (preferredHost && preferredHost !== "") {
-            window.setHost(preferredHost)
+        window._bulkPush = true
+        try {
+            if (appState.mode !== "DMR") {
+                window.setMode("DMR")
+            }
+            if (preferredHost && preferredHost !== "") {
+                window.setHost(preferredHost)
+            }
+            // Connecting from Messages never links the Home page's voice talkgroup; a group
+            var numTarget = parseInt(targetId || "0") || 0
+            window._rememberHomeTarget()
+            if (isGroup && numTarget > 0) {
+                appState.privateCall = false
+                appState.dmrtgid = String(numTarget)
+            } else {
+                appState.privateCall = true
+                appState.dmrtgid = String(parseInt(appState.dmrid) || 9990)
+            }
+            window.smsStandbyActive = true
+            droidstar.set_dmr_pc(appState.privateCall ? 1 : 0)
+            droidstar.set_dmrtgid(appState.dmrtgid)
+            droidstar.tgid_text_changed(appState.dmrtgid)
+        } finally {
+            window._bulkPush = false
         }
         Qt.callLater(function() {
             if (!appState.connected && !appState.connecting) {
@@ -214,7 +314,7 @@ ApplicationWindow {
         })
     }
 
-    // App state model - renamed from "state" to "appState" to avoid QML reserved property conflict
+    // App state model - renamed from "state" to "appState" to avoid
     QtObject {
         id: appState
         property string mode: "DMR"
@@ -330,6 +430,7 @@ ApplicationWindow {
         property string lastHeard3: ""
         property string lastHeard4: ""
         property string lastHeard5: ""
+        property var lastHeardEntries: []
         property string fetchedFirstName: ""
         property string fetchedCountry: ""
 
@@ -383,8 +484,6 @@ ApplicationWindow {
     }
 
     // IMPORTANT: expose the QtObject `id` through a window property.
-    // Otherwise, writing `appState: appState` inside child components self-references their required
-    // `appState` property and creates a binding loop.
     readonly property var appStateObj: appState
 
     // Bounded app log model
@@ -399,9 +498,7 @@ ApplicationWindow {
         if (appLogModel.count > 1200) appLogModel.remove(0, appLogModel.count - 1200)
     }
 
-    // ─────────────────────────────────────────────────────────
     // QSO LOG HELPERS (Last Heard + self-filter + limit)
-    // ─────────────────────────────────────────────────────────
     function _fmtLastHeard(entry) {
         if (!entry) return ""
         var parts = []
@@ -417,6 +514,28 @@ ApplicationWindow {
         appState.lastHeard3 = (arr && arr.length > 2) ? _fmtLastHeard(arr[2]) : ""
         appState.lastHeard4 = (arr && arr.length > 3) ? _fmtLastHeard(arr[3]) : ""
         appState.lastHeard5 = (arr && arr.length > 4) ? _fmtLastHeard(arr[4]) : ""
+
+        var structured = []
+        if (arr && arr.length !== undefined) {
+            var lim = Math.min(arr.length, 5)
+            for (var i = 0; i < lim; i++) {
+                var e = arr[i]
+                if (!e) continue
+                var textLine = _fmtLastHeard(e)
+                var dmrVal = parseInt(e.dmrID || "0") || 0
+                if (textLine === "" && dmrVal <= 0) continue
+                structured.push({
+                    callsign: String(e.callsign || ""),
+                    dmrID: dmrVal,
+                    fname: String(e.fname || ""),
+                    country: String(e.country || ""),
+                    tgid: parseInt(e.tgid || "0") || 0,
+                    currentTime: String(e.currentTime || ""),
+                    displayText: textLine !== "" ? textLine : ("ID " + dmrVal)
+                })
+            }
+        }
+        appState.lastHeardEntries = structured
     }
 
     function _normCallsign(s) {
@@ -521,11 +640,8 @@ ApplicationWindow {
         _setLastHeardFromArray(saved)
     }
 
-    // ─────────────────────────────────────────────────────────
     // BACKEND SYNC
-    // ─────────────────────────────────────────────────────────
     // Every backend setter calls save_settings(), which emits update_settings. While we push
-    // many values at once (connect), suppress the echo and sync once afterwards.
     property bool _bulkPush: false
 
     function syncSettingsFromBackend() {
@@ -662,7 +778,7 @@ ApplicationWindow {
         if (!droidstar) return
 
         window.initializing = true
-        // CC state comes from TranscriptionEngine's own saved settings; sync it before anything below can throw
+        // CC state comes from TranscriptionEngine's own saved settings; sync it before
         window._syncTranscriptionState()
         try {
             // Clean up any orphan Live Activities from previous app runs
@@ -682,12 +798,19 @@ ApplicationWindow {
             // Sync all other settings from QSettings
             syncSettingsFromBackend()
 
+            if (controlSettings.smsRestoreTg !== "") {
+                window.smsStandbyRestoreTg = controlSettings.smsRestoreTg
+                window.smsStandbyRestorePc = !!controlSettings.smsRestorePc
+                window.smsStandbyActive = true
+                window._restoreHomeTarget()
+            }
+
             // Load persisted UI settings (QSO log)
             appState.disableSelfLog = !!uiSettings.disableSelfLog
             appState.qsoLogLimit = window._clampQsoLogLimit(uiSettings.qsoLogLimit)
             uiSettings.qsoLogLimit = appState.qsoLogLimit
 
-            // Load persisted runtime controls (TX audio settings are synced from backend via syncSettingsFromBackend)
+            // Load persisted runtime controls (TX audio settings are synced from backend
             appState.micGain = Math.max(0, Math.min(1, controlSettings.micGain))
             appState.spkVolume = Math.max(0, Math.min(1, controlSettings.spkVolume))
             appState.agc = true
@@ -702,7 +825,6 @@ ApplicationWindow {
             appState.ttsVoice = controlSettings.ttsVoice || "Mic"
 
             // TranscriptionEngine persists its own state in QSettings("dudetronics", "droidstar");
-            // sync appState from TranscriptionEngine so user's enable/disable choice is preserved across launches.
             if (window.transcriptionEngineRef) {
                 window.transcriptionEngineRef.setUserCallsign(appState.callsign)
                 window._syncTranscriptionState()
@@ -716,7 +838,7 @@ ApplicationWindow {
 
             // Populate "Last Heard" on app load
             syncLastHeardFromLogFile()
-            // Ensure logs.json exists (prevents first-run "file not found" and enables realtime updates)
+            // Ensure logs.json exists (prevents first-run "file not found" and enables realtime
             if (window.logHandlerRef) {
                 var existingLog = window.logHandlerRef.loadLog("logs.json")
                 window.logHandlerRef.saveLogAsync("logs.json", existingLog)
@@ -741,9 +863,7 @@ ApplicationWindow {
         }
     }
 
-    // ─────────────────────────────────────────────────────────
     // ACTIONS (shared by every page so behaviour is identical everywhere)
-    // ─────────────────────────────────────────────────────────
     function flushPendingEdits() {
         Qt.inputMethod.commit()
         // Focus-out makes any focused FormField commit synchronously.
@@ -872,7 +992,7 @@ ApplicationWindow {
         droidstar.process_connect()
     }
 
-    // Backend creates a fresh Mode object on every connect, so runtime-only state must be re-sent.
+    // Backend creates a fresh Mode object on every connect, so runtime-only
     function applyRuntimeState() {
         if (!droidstar || !appState.connected) return
         droidstar.set_input_volume(appState.micGain)
@@ -970,6 +1090,7 @@ ApplicationWindow {
     function setDmrSlot(i) { appState.dmrSlot = i; if (droidstar) droidstar.set_slot(i) }
     function setDmrCc(i) { appState.dmrCc = i; if (droidstar) droidstar.set_cc(i) }
     function setPrivateCall(on) {
+        window._forgetSmsStandby()
         appState.privateCall = !!on
         flushPendingEdits()
         if (droidstar) {
@@ -1111,7 +1232,7 @@ ApplicationWindow {
 
         window.navigate("main")
 
-        // Smart One-Tap Tune: if already connected to the same mode & host, switch TG/Module live without disconnecting!
+        // Smart One-Tap Tune: if already connected to the same mode & host,
         if (appState.connected &&
             (targetMode === "" || targetMode === appState.mode) &&
             (targetHost === "" || targetHost === appState.selectedHost || targetHost === appState.host)) {
@@ -1128,7 +1249,7 @@ ApplicationWindow {
             return
         }
 
-        // If currently connected to a different mode/host, disconnect first, then apply and connect
+        // If currently connected to a different mode/host, disconnect first, then apply
         var wasBusy = (appState.connected || appState.connecting)
         if (wasBusy) {
             if (appState.txActive) window.txSet(false)
@@ -1182,6 +1303,7 @@ ApplicationWindow {
 
     function commitTalkgroup(tg) {
         var v = ("" + tg).trim()
+        if (v !== String(appState.dmrtgid || "")) window._forgetSmsStandby()
         appState.dmrtgid = v
         if (!droidstar) return
         droidstar.set_dmrtgid(v)
@@ -1291,6 +1413,7 @@ ApplicationWindow {
         if (appState.mode !== "DMR") {
             window.setMode("DMR")
         }
+        window._forgetSmsStandby()
         var isPriv = !!asPrivate
         appState.privateCall = isPriv
         appState.dmrtgid = v
@@ -1462,8 +1585,6 @@ ApplicationWindow {
             appState.hoselineFavCalls = droidstar.getActiveFavouriteCalls()
         }
         // Closed-loop verification: if our currently tuned BrandMeister talkgroup is live on air
-        // on Hoseline, but local RX hasn't started yet after initial link, re-link once
-        // (BrandMeister Homebrew only; ODTP subscribes via REWIND_TYPE_SUBSCRIPTION, and Hoseline is BM-only).
         var odtpOn = (typeof droidstar.is_odtp_active === "function" && droidstar.is_odtp_active())
         var tgifOn = (typeof droidstar.is_tgif_host === "function" && droidstar.is_tgif_host())
         var isBmHost = String(appState.selectedHost || "").toUpperCase().indexOf("BM") === 0 ||
@@ -1563,10 +1684,8 @@ ApplicationWindow {
         }
     }
 
-    // ─────────────────────────────────────────────────────────
     // BACKEND -> UI
-    // ─────────────────────────────────────────────────────────
-    // If QSO log is saved/cleared from anywhere, keep Last Heard in sync (no navigation required).
+    // If QSO log is saved/cleared from anywhere, keep Last Heard in
     Connections {
         target: window.logHandlerRef
         enabled: window.logHandlerRef !== null
@@ -1575,6 +1694,31 @@ ApplicationWindow {
         }
         function onLogCleared(fileName) {
             if (fileName === "logs.json") window._setLastHeardFromArray([])
+        }
+    }
+
+    Connections {
+        target: window.smsManagerRef
+        enabled: window.smsManagerRef !== null
+        function onMessageReceived(srcId, senderLabel, preview, isGroup, threadKey) {
+            window.pendingMessageThread = threadKey
+            if (window.currentPage !== "messages") {
+                window.notify(
+                    qsTr("SMS from %1: %2").arg(senderLabel).arg(preview),
+                    qsTr("View"),
+                    function() {
+                        window.navigate("messages")
+                        if (window.smsManagerRef) window.smsManagerRef.openThread(threadKey)
+                    },
+                    "info")
+            }
+        }
+        function onThreadRequested(threadKey) {
+            window.pendingMessageThread = threadKey
+            window.navigate("messages")
+        }
+        function onOperationError(message) {
+            window.notify(message, "", null, "warning")
         }
     }
 
@@ -1634,8 +1778,7 @@ ApplicationWindow {
                 window._pendingLogKey = key
                 if (window.vuidUpdaterRef) window.vuidUpdaterRef.fetchFirstNameFromAPI(dmr)
             }
-            // When RX goes idle (DMR EOT clears data2), clear the fetched display values
-            // and reset the key so the next RX re-fetches even if the same handle speaks again.
+            // When RX goes idle (DMR EOT clears data2), clear the fetched display
             if (!(dmr > 0)) {
                 appState.fetchedFirstName = ""
                 appState.fetchedCountry = ""
@@ -1720,6 +1863,7 @@ ApplicationWindow {
                     appState.favScanActive = false
                     appState.allScanActive = false
                 }
+                if (!isTuningReconn) window._restoreHomeTarget()
             }
             if (c === 2) {
                 window._lastScanHopMs = Date.now()
@@ -1814,7 +1958,7 @@ ApplicationWindow {
             if (current.length > 0) {
                 var top = current[0]
                 if ((top.dmrID || 0) === dmrId && (top.tgid || 0) === window._pendingLogTgid) {
-                    // Enrich top entry if it was created early by live transcription before radioid.net replied
+                    // Enrich top entry if it was created early by live transcription
                     var updated = false
                     if (callsign && (!top.callsign || top.callsign === String(dmrId))) { top.callsign = callsign; updated = true }
                     if (name && !top.fname) { top.fname = name; updated = true }
@@ -1919,7 +2063,7 @@ ApplicationWindow {
             if (matchedIdx >= 0) {
                 window._appendTurnToLogEntry(current[matchedIdx], turnObj)
             } else if (dmrId > 0 || cleanCall !== "") {
-                // Create the QSO entry for this station so the transcript is never mapped to a different handle
+                // Create the QSO entry for this station so the transcript is
                 var nextSerial = 0
                 for (var k = 0; k < current.length; k++) {
                     var sn = current[k].serialNumber
@@ -2045,7 +2189,7 @@ ApplicationWindow {
         window.liveActivityRef.startOrUpdate(mode, callsign, handle, country, tgid)
     }
 
-    // Update live activity from app state changes (using CFRunLoop-backed Timer so background updates fire reliably)
+    // Update live activity from app state changes (using CFRunLoop-backed Timer so background
     Connections {
         target: appState
         function onConnectedChanged() { window.updateDynamicIsland() }
@@ -2057,9 +2201,7 @@ ApplicationWindow {
         function onFetchedCountryChanged() { window.scheduleDynamicIslandUpdate() }
     }
 
-    // ─────────────────────────────────────────────────────────
     // NAVIGATION DRAWER (modal on phones, docked sidebar on wide screens)
-    // ─────────────────────────────────────────────────────────
     Drawer {
         id: navDrawer
         y: window.navDocked ? topBar.height : 0
@@ -2102,10 +2244,13 @@ ApplicationWindow {
                 id: drawerColumn
                 width: drawerFlick.width
                 height: Math.max(drawerFlick.height, implicitHeight)
-                spacing: 12
+                // Nav rows carry their own padding; tighter gaps keep the whole
+                readonly property bool compactMenu: window.height < 900
+                spacing: compactMenu ? 4 : 8
 
                 AppCard {
                     Layout.fillWidth: true
+                    Layout.bottomMargin: 8
                     radius: 18
                     RowLayout {
                         anchors.fill: parent
@@ -2188,6 +2333,14 @@ ApplicationWindow {
                                    ? (appState.hoselineActiveFavCount + " " + qsTr("LIVE"))
                                    : qsTr("LIVE")
                         },
+                        {
+                            key: "messages",
+                            title: qsTr("Messages"),
+                            icon: "\uf0e0",
+                            badge: (window.smsManagerRef && window.smsManagerRef.unreadCount > 0)
+                                   ? (window.smsManagerRef.unreadCount + " " + qsTr("NEW"))
+                                   : qsTr("NEW")
+                        },
                         { key: "settings", title: qsTr("Settings"), icon: "\uf013" },
                         { key: "qso",      title: qsTr("QSO"),      icon: "\uf2b9" },
                         { key: "nets",     title: qsTr("Nets"),     icon: "\uf0f3", badge: qsTr("NEW") },
@@ -2199,6 +2352,7 @@ ApplicationWindow {
                     delegate: DrawerItem {
                         required property var modelData
                         Layout.fillWidth: true
+                        compact: drawerColumn.compactMenu
                         text: modelData.title
                         iconText: modelData.icon
                         badgeText: modelData.badge || ""
@@ -2220,15 +2374,13 @@ ApplicationWindow {
 
                 DonateButtons {
                     Layout.fillWidth: true
-                    buttonHeight: 46
+                    buttonHeight: drawerColumn.compactMenu ? 40 : 46
                 }
             }
         }
     }
 
-    // ─────────────────────────────────────────────────────────
     // TOP BAR
-    // ─────────────────────────────────────────────────────────
     header: ToolBar {
         id: topBar
         Material.elevation: 0
@@ -2310,7 +2462,8 @@ ApplicationWindow {
                         color: statusPill.tone
                         anchors.verticalCenter: parent.verticalCenter
                         SequentialAnimation on opacity {
-                            running: appState.connecting || appState.txActive
+                            // Infinite animations keep ticking on a 16 ms timer when the
+                            running: (appState.connecting || appState.txActive) && Qt.application.state === Qt.ApplicationActive
                             loops: Animation.Infinite
                             alwaysRunToEnd: true
                             NumberAnimation { to: 0.25; duration: 450; easing.type: Easing.InOutSine }
@@ -2349,12 +2502,11 @@ ApplicationWindow {
         }
     }
 
-    // ─────────────────────────────────────────────────────────
     // PAGES (created on first visit, then kept alive for instant switching)
-    // ─────────────────────────────────────────────────────────
     function _componentFor(key) {
         if (key === "main") return mainPageComponent
         if (key === "scan") return scanPageComponent
+        if (key === "messages") return messagesPageComponent
         if (key === "settings") return settingsPageComponent
         if (key === "qso") return qsoPageComponent
         if (key === "nets") return netsPageComponent
@@ -2409,14 +2561,15 @@ ApplicationWindow {
     Toast {
         id: toaster
         anchors.fill: parent
-        anchors.leftMargin: window.navDocked ? navDrawer.width : 0
-        bottomOffset: safeAreaObj.bottom
+        anchors.leftMargin: window.navDocked ? navDrawer.width : safeAreaObj.left
+        anchors.rightMargin: safeAreaObj.right
+        // Pages can lift the toast above their own bottom bars (e.g.
+        bottomOffset: safeAreaObj.bottom + ((window.currentPageItem && window.currentPageItem.toastBottomInset !== undefined)
+                                            ? window.currentPageItem.toastBottomInset : 0)
         z: 100
     }
 
-    // ─────────────────────────────────────────────────────────
     // MODERN ANIMATED SPLASH OVERLAY (Full New Logo + RF Pulse & Spectrum)
-    // ─────────────────────────────────────────────────────────
     Rectangle {
         id: splashOverlay
         anchors.fill: parent
@@ -2792,12 +2945,24 @@ ApplicationWindow {
         }
     }
     Component {
+        id: messagesPageComponent
+        MessagesPage {
+            objectName: "messages"
+            app: window
+            droidstarRef: window.droidstar
+            appState: window.appStateObj
+            smsManagerRef: window.smsManagerRef
+            initialThreadKey: window.pendingMessageThread
+        }
+    }
+    Component {
         id: settingsPageComponent
         SettingsPage {
             objectName: "settings"
             app: window
             droidstarRef: window.droidstar
             appState: window.appStateObj
+            smsManagerRef: window.smsManagerRef
         }
     }
     Component {

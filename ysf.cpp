@@ -220,6 +220,10 @@ void YSF::process_udp()
 		}
 	}
 
+	// Voice frames can arrive before the connect poll reply (reconnect while
+	if(p_data != nullptr && (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio)){
+		p_data = nullptr;
+	}
 	if(p_data != nullptr){
 		m_rxwatchdog = 0;
 		CYSFFICH fich;
@@ -235,6 +239,8 @@ void YSF::process_udp()
 				m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
 				if(!m_tx && !m_rxtimer->isActive() ){
 					m_audio->start_playback();
+					rxJitterReset();
+					rxImbeReset();
 					m_rxtimer->start(m_rxtimerint);
 				}
 				decode_header(p_data);
@@ -254,6 +260,8 @@ void YSF::process_udp()
 					m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
 					if(!m_tx && !m_rxtimer->isActive() ){
 						m_audio->start_playback();
+						rxJitterReset();
+						rxImbeReset();
 						m_rxtimer->start(m_rxtimerint);
 					}
 					qDebug() << "New YSF stream in progress from gw" << m_modeinfo.gw;
@@ -1388,16 +1396,31 @@ void YSF::process_rx_data()
 		cnt = 0;
 	}
 
-	if((!m_tx) && (m_rximbecodecq.size() > 10)){
+	if(!m_tx && !m_rxImbePrimed && m_rximbecodecq.size() >= 33){
+		m_rxImbePrimed = true; // 3 IMBE frames (60 ms) buffered before first playout
+	}
+	if((!m_tx) && m_rxImbePrimed && (m_rximbecodecq.size() >= 11)){
+		m_rxImbeConcealRun = 0;
 		for(int i = 0; i < 11; ++i){
 			imbe[i] = m_rximbecodecq.dequeue();
 		}
+		memcpy(m_lastImbe, imbe, 11);
+		m_haveLastImbe = true;
 		vocoder.decode_4400(pcm, imbe);
 		m_audio->write(pcm, 160);
 		emit update_output_level(m_audio->level());
 	}
+	else if((!m_tx) && m_rxImbePrimed && m_haveLastImbe && m_rxcodecq.isEmpty()
+	        && (m_modeinfo.stream_state == STREAMING) && (m_rxImbeConcealRun < 5)){
+		// Late/missing VW frame: re-synthesise the last IMBE frame instead of starving the sink
+		++m_rxImbeConcealRun;
+		vocoder.decode_4400(pcm, m_lastImbe);
+		m_audio->write(pcm, 160);
+		emit update_output_level(m_audio->level());
+	}
 
-	else if((!m_tx) && (m_rxcodecq.size() > 6) ){
+	else if((!m_tx) && rxJitterReady(7, false)){
+		m_rxConcealRun = 0;
 		for(int i = 0; i < 7; ++i){
 			ambe[i] = m_rxcodecq.dequeue();
 		}
@@ -1426,6 +1449,16 @@ void YSF::process_rx_data()
 			emit update_output_level(m_audio->level());
 		}
 	}
+	else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && m_rximbecodecq.isEmpty() && rxShouldConceal()){
+		// Late/missing AMBE frame: vocoder lost-frame repeat instead of starving the sink
+#ifdef USE_MD380_VOCODER
+		memset(pcm, 0, 160 * sizeof(int16_t));
+#else
+		m_mbevocoder->conceal_2450(pcm);
+#endif
+		m_audio->write(pcm, 160);
+		emit update_output_level(m_audio->level());
+	}
 
 	else if ( ((m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_LOST)) && (m_rxmodemq.size() < 100) ){
 		m_rxtimer->stop();
@@ -1433,7 +1466,9 @@ void YSF::process_rx_data()
 		m_rxwatchdog = 0;
 		m_modeinfo.streamid = 0;
 		m_rxcodecq.clear();
+		rxJitterReset();
 		m_rximbecodecq.clear();
+		rxImbeReset();
 		//m_ambedev->clear_queue();
 		qDebug() << "YSF playback stopped";
 		m_modeinfo.stream_state = STREAM_IDLE;

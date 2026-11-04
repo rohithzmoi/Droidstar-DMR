@@ -100,6 +100,11 @@ void NXDN::process_udp()
 		m_modeinfo.count++;
 	}
 	if(buf.size() == 43){
+		// Voice before the 17-byte poll reply would dereference m_rxtimer/m_audio before they
+		if (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio) {
+			emit update(m_modeinfo);
+			return;
+		}
 		m_modeinfo.srcid = (uint16_t)((buf.data()[5] << 8) & 0xff00) | (buf.data()[6] & 0xff);
 		m_modeinfo.dstid = (uint16_t)((buf.data()[7] << 8) & 0xff00) | (buf.data()[8] & 0xff);
 		if(get_lich_fct(buf.data()[10U]) == NXDN_LICH_USC_SACCH_NS){
@@ -113,6 +118,7 @@ void NXDN::process_udp()
 			else{
 				if(!m_rxtimer->isActive()){
 					m_audio->start_playback();
+					rxJitterReset();
 					m_rxtimer->start(m_rxtimerint);
 				}
 				m_modeinfo.stream_state = STREAM_NEW;
@@ -123,6 +129,7 @@ void NXDN::process_udp()
 		else if(!m_tx && ( (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_IDLE) )){
 			if(!m_rxtimer->isActive()){
 				m_audio->start_playback();
+				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
 			}
 			m_modeinfo.stream_state = STREAM_NEW;
@@ -655,7 +662,8 @@ void NXDN::process_rx_data()
 		m_rxcodecq.clear();
 	}
 
-	if((!m_tx) && (m_rxcodecq.size() > 6) ){
+	if((!m_tx) && rxJitterReady(7)){
+		m_rxConcealRun = 0;
 		for(int i = 0; i < 7; ++i){
 			ambe[i] = m_rxcodecq.dequeue();
 		}
@@ -684,12 +692,23 @@ void NXDN::process_rx_data()
 			emit update_output_level(m_audio->level());
 		}
 	}
+	else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && rxShouldConceal()){
+		// Late/missing AMBE frame: vocoder lost-frame repeat instead of starving the sink
+#ifdef USE_MD380_VOCODER
+		memset(pcm, 0, 160 * sizeof(int16_t));
+#else
+		m_mbevocoder->conceal_2450(pcm);
+#endif
+		m_audio->write(pcm, 160);
+		emit update_output_level(m_audio->level());
+	}
 	else if ( (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_LOST) ){
 		m_rxtimer->stop();
 		m_audio->stop_playback();
 		m_rxwatchdog = 0;
 		m_modeinfo.streamid = 0;
 		m_rxcodecq.clear();
+		rxJitterReset();
 		qDebug() << "YSF playback stopped";
 		m_modeinfo.stream_state = STREAM_IDLE;
 		return;

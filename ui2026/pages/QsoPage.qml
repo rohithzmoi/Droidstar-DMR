@@ -47,6 +47,19 @@ Page {
     property int viewerTgid: 0
 
     readonly property bool roomy: width >= 560
+    // Below this the log rows have < 190pt of text width after the checkbox and action buttons
+    readonly property bool tightRows: width < 350
+
+    readonly property var _smsThreads: (app && app.smsManagerRef) ? (app.smsManagerRef.threads || []) : []
+    function unreadFrom(dmrId) {
+        if (!(dmrId > 0)) return 0
+        var key = "p:" + dmrId
+        for (var i = 0; i < page._smsThreads.length; i++) {
+            var th = page._smsThreads[i]
+            if (th && th.threadKey === key) return parseInt(th.unreadCount || "0") || 0
+        }
+        return 0
+    }
 
     Tokens { id: t }
 
@@ -305,16 +318,14 @@ Page {
 
     Component.onCompleted: loadLog()
 
-    // Refresh list whenever logs.json changes (global logger writes it even if QSO page isn't open)
+    // Refresh list whenever logs.json changes (global logger writes it even if
     Connections {
         target: page.logHandlerRef
         function onLogSaved(fileName) { if (fileName === page.logFileName) page.loadLog() }
         function onLogCleared(fileName) { if (fileName === page.logFileName) page.loadLog() }
     }
 
-    // ─────────────────────────────────────────────────────────
     // RESPONSIVE HANDLE TRANSCRIPTION VIEWER SHEET
-    // ─────────────────────────────────────────────────────────
     Popup {
         id: transcriptViewerSheet
         parent: Overlay.overlay
@@ -377,6 +388,9 @@ Page {
                         spacing: 8
 
                         Label {
+                            Layout.minimumWidth: 0
+                            Layout.maximumWidth: Math.ceil(implicitWidth) + 1
+                            Layout.fillWidth: true
                             text: page.viewerCallsign !== "" ? page.viewerCallsign : qsTr("ID %1").arg(page.viewerDmrId)
                             font.pixelSize: 20
                             font.bold: true
@@ -401,6 +415,7 @@ Page {
                         }
 
                         Rectangle {
+                            visible: transcriptViewerSheet.width >= 380
                             radius: 6
                             color: t.surface3
                             implicitHeight: 20
@@ -427,9 +442,23 @@ Page {
                     }
                 }
 
+                RoundIconButton {
+                    visible: page.viewerDmrId > 0 &&
+                             page.viewerDmrId !== parseInt(page.appState ? (page.appState.dmrid || "0") : "0")
+                    glyph: "\uf0e0"
+                    tone: t.accent
+                    glyphSize: 15
+                    badge: page.unreadFrom(page.viewerDmrId)
+                    accessibleName: qsTr("Message %1").arg(page.viewerCallsign)
+                    onClicked: {
+                        transcriptViewerSheet.close()
+                        if (page.app) page.app.openMessageTo(page.viewerDmrId, page.viewerCallsign, false)
+                    }
+                }
+
                 AppButton {
                     visible: viewerTurnsModel.count > 0
-                    text: qsTr("Export")
+                    text: page.roomy ? qsTr("Export") : ""
                     glyph: "\uf093"
                     tone: "primary"
                     implicitHeight: 36
@@ -558,18 +587,13 @@ Page {
         }
     }
 
-    // ─────────────────────────────────────────────────────────
     // DIALOGS
-    // ─────────────────────────────────────────────────────────
-    Dialog {
+    AppDialog {
         id: exportDialog
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: Math.min(parent ? parent.width - 32 : 360, 420)
+        maxWidth: 420
         title: qsTr("Export log")
-        modal: true
+        acceptText: qsTr("Export")
         standardButtons: Dialog.Cancel | Dialog.Save
-        Overlay.modal: Rectangle { color: "#99000000" }
 
         property bool csv: true
 
@@ -597,6 +621,15 @@ Page {
                 checked: false
                 text: exportDialog.csv ? qsTr("Include transcriptions (Transcript column)")
                                        : qsTr("Include transcriptions (ADIF COMMENT field)")
+                // The style's label elides; wrap instead so the option stays readable on narrow dialogs
+                contentItem: Label {
+                    leftPadding: includeTranscriptsCheck.indicator ? includeTranscriptsCheck.indicator.width + includeTranscriptsCheck.spacing : 0
+                    text: includeTranscriptsCheck.text
+                    font: includeTranscriptsCheck.font
+                    color: t.text
+                    wrapMode: Text.WordWrap
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
 
             Label {
@@ -619,15 +652,11 @@ Page {
         onRejected: page.customExportEntries = null
     }
 
-    Dialog {
+    AppDialog {
         id: savedDialog
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: Math.min(parent ? parent.width - 32 : 360, 420)
+        maxWidth: 420
         title: qsTr("File saved")
-        modal: true
         standardButtons: Dialog.Close
-        Overlay.modal: Rectangle { color: "#99000000" }
 
         ColumnLayout {
             width: parent.width
@@ -648,15 +677,12 @@ Page {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: confirmClearDialog
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: Math.min(parent ? parent.width - 32 : 360, 400)
+        maxWidth: 400
         title: qsTr("Clear QSO log?")
-        modal: true
+        destructiveText: qsTr("Clear log")
         standardButtons: Dialog.Cancel | Dialog.Discard
-        Overlay.modal: Rectangle { color: "#99000000" }
 
         ColumnLayout {
             width: parent.width
@@ -684,15 +710,21 @@ Page {
             text: qsTr("View Transcriptions")
             onTriggered: if (rowMenu.rowData) page.openTranscriptViewer(rowMenu.rowData)
         }
+        MenuItem {
+            text: qsTr("Send DMR Message")
+            enabled: !!(rowMenu.rowData && parseInt(rowMenu.rowData.dmrID || "0") > 0)
+            onTriggered: {
+                if (page.app && rowMenu.rowData)
+                    page.app.openMessageTo(rowMenu.rowData.dmrID, rowMenu.rowData.callsign, false)
+            }
+        }
         MenuSeparator {}
         MenuItem { text: qsTr("Lookup on QRZ"); onTriggered: Qt.openUrlExternally("https://qrz.com/lookup/" + encodeURIComponent(rowMenu.callsign)) }
         MenuItem { text: qsTr("Lookup on Brandmeister"); onTriggered: Qt.openUrlExternally("https://brandmeister.network/index.php?page=profile&call=" + encodeURIComponent(rowMenu.callsign)) }
         MenuItem { text: qsTr("Lookup on APRS.fi"); onTriggered: Qt.openUrlExternally("https://aprs.fi/#!call=a%2F" + encodeURIComponent(rowMenu.callsign)) }
     }
 
-    // ─────────────────────────────────────────────────────────
     // CONTENT
-    // ─────────────────────────────────────────────────────────
     ColumnLayout {
         id: body
         anchors.top: parent.top
@@ -884,9 +916,12 @@ Page {
                     }
 
                     ColumnLayout {
+                        id: rowTextCol
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         spacing: 4
+                        // Narrow rows (Slide Over, small phones): the TG and transcript pills move
+                        readonly property bool tight: page.tightRows
 
                         RowLayout {
                             Layout.fillWidth: true
@@ -897,10 +932,13 @@ Page {
                                 font.pixelSize: 16
                                 color: t.text
                                 elide: Text.ElideRight
-                                Layout.maximumWidth: rowLayout.width * 0.45
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                Layout.maximumWidth: rowTextCol.tight ? Math.ceil(implicitWidth) + 1
+                                                                      : Math.min(Math.ceil(implicitWidth) + 1, rowLayout.width * 0.45)
                             }
                             Rectangle {
-                                visible: !!row.tgid
+                                visible: !!row.tgid && !rowTextCol.tight
                                 radius: 8
                                 implicitHeight: 20
                                 implicitWidth: tgLabel.implicitWidth + 12
@@ -928,17 +966,20 @@ Page {
 
                             Label {
                                 Layout.fillWidth: true
+                                Layout.preferredWidth: 1
                                 visible: text !== ""
                                 text: row.fname + ((row.fname !== "" && row.country !== "") ? " • " : "") + row.country
                                 font.pixelSize: t.fsSmall
                                 color: t.text
                                 opacity: 0.85
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: rowTextCol.tight ? 2 : 1
                                 elide: Text.ElideRight
                             }
 
-                            // Responsive inline "Transcripts" pill button to view full timestamped turns of this handle
+                            // Responsive inline "Transcripts" pill button to view full timestamped turns of
                             Rectangle {
-                                visible: row.transcript !== ""
+                                visible: row.transcript !== "" && !rowTextCol.tight
                                 radius: 7
                                 color: t.tint(t.accent, 0.18)
                                 border.color: t.tint(t.accent, 0.5)
@@ -984,6 +1025,66 @@ Page {
                             color: t.textMuted
                         }
 
+                        // Tight rows: the TG / transcript pills get their own line (fixed
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: rowTextCol.tight && (!!row.tgid || row.transcript !== "")
+                            spacing: 8
+
+                            Rectangle {
+                                visible: !!row.tgid
+                                radius: 8
+                                implicitWidth: tgLabelTight.implicitWidth + 12
+                                implicitHeight: 20
+                                color: t.tint(t.accent, 0.16)
+                                Label {
+                                    id: tgLabelTight
+                                    anchors.centerIn: parent
+                                    text: "TG " + row.tgid
+                                    font.pixelSize: t.fsCaption
+                                    color: t.accent
+                                }
+                            }
+                            Rectangle {
+                                visible: row.transcript !== ""
+                                radius: 7
+                                color: t.tint(t.accent, 0.18)
+                                border.color: t.tint(t.accent, 0.5)
+                                border.width: 1
+                                implicitHeight: 22
+                                implicitWidth: viewTransRowTight.implicitWidth + 12
+
+                                Row {
+                                    id: viewTransRowTight
+                                    anchors.centerIn: parent
+                                    spacing: 4
+                                    Label {
+                                        text: "\uf20a"
+                                        font.family: "FontAwesome"
+                                        font.pixelSize: 10
+                                        color: t.accent
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Label {
+                                        text: row.turnCount > 1 ? qsTr("View (%1)").arg(row.turnCount) : qsTr("View")
+                                        font.pixelSize: t.fsCaption
+                                        font.bold: true
+                                        color: t.accent
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -4
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: row.openHandleTranscripts()
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
                         // Compact preview box (tap to open full timestamped handle transcript viewer)
                         Rectangle {
                             Layout.fillWidth: true
@@ -1018,8 +1119,24 @@ Page {
                         }
                     }
 
+                    RoundIconButton {
+                        readonly property int rowId: parseInt(row.dmrID || "0") || 0
+                        readonly property int unread: page.unreadFrom(rowId)
+                        visible: rowId > 0 && rowId !== parseInt(page.appState ? (page.appState.dmrid || "0") : "0")
+                        Layout.alignment: Qt.AlignVCenter
+                        implicitWidth: 38
+                        implicitHeight: 38
+                        glyphSize: 15
+                        glyph: unread > 0 ? "\uf0e0" : "\uf003"
+                        tone: unread > 0 ? t.accent : t.textMuted
+                        badge: unread
+                        accessibleName: qsTr("Message %1").arg(row.callsign !== "" ? row.callsign : rowId)
+                        onClicked: if (page.app) page.app.openMessageTo(rowId, row.callsign, false)
+                    }
+
                     ToolButton {
                         id: optionsButton
+                        Layout.alignment: Qt.AlignVCenter
                         text: "\uf142"
                         font.family: "FontAwesome"
                         font.pixelSize: 16

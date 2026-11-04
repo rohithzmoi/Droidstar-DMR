@@ -82,7 +82,8 @@ void DCS::process_udp()
 	if(m_modeinfo.status != CONNECTED_RW) return;
 	if(size == 35){
 		m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
-		m_modeinfo.netmsg = QString(buf.data());
+		// The datagram is not NUL-terminated; never scan past the 35 received bytes.
+		m_modeinfo.netmsg = QString::fromLatin1(buf.constData(), qstrnlen(buf.constData(), 35));
 	}
 	if((size == 100) && (!memcmp(buf.data(), "0001", 4)) ){
 		m_rxwatchdog = 0;
@@ -95,6 +96,7 @@ void DCS::process_udp()
 
 			if(!m_rxtimer->isActive()){
 				m_audio->start_playback();
+				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
 				m_rxcodecq.clear();
 			}
@@ -563,7 +565,8 @@ void DCS::process_rx_data()
 		}
 	}
 
-	if((!m_tx) && (m_rxcodecq.size() > 8) ){
+	if((!m_tx) && rxJitterReady(9)){
+		m_rxConcealRun = 0;
 		for(int i = 0; i < 9; ++i){
 			ambe[i] = m_rxcodecq.dequeue();
 		}
@@ -588,12 +591,19 @@ void DCS::process_rx_data()
 			emit update_output_level(m_audio->level());
 		}
 	}
+	else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && rxShouldConceal()){
+		// Late/missing network frame: vocoder lost-frame repeat instead of starving the sink
+		m_mbevocoder->conceal_2400x1200(pcm);
+		m_audio->write(pcm, 160);
+		emit update_output_level(m_audio->level());
+	}
 	else if ( (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_LOST) ){
 		m_rxtimer->stop();
 		m_audio->stop_playback();
 		m_rxwatchdog = 0;
 		m_modeinfo.streamid = 0;
 		m_rxcodecq.clear();
+		rxJitterReset();
 		qDebug() << "DCS playback stopped";
 		m_modeinfo.stream_state = STREAM_IDLE;
 		return;

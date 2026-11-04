@@ -21,6 +21,7 @@
  */
 
 
+#include <cmath>
 #include "typedef.h"
 #include "globals.h"
 #include "imbe.h"
@@ -48,10 +49,108 @@ void imbe_vocoder_impl::encode_init(void)
 	v_zap(pitch_ref_buf, PITCH_EST_BUF_SIZE);
 	v_zap(pe_lpf_mem, PE_LPF_ORD);
 	pitch_est_init();
+	robust_prev_lag = 0;
 	fft_init();
 	dc_rmv_mem = 0;
 	sa_encode_init();
 	pitch_ref_init();
+}
+
+// Robust coarse-pitch override. The stock IMBE pitch tracker (pitch_est) was measured
+void imbe_vocoder_impl::robust_pitch_override(IMBE_PARAM *imbe_param)
+{
+	constexpr int kMinLag = 20;   // 400 Hz
+	constexpr int kMaxLag = 127;  // 63 Hz
+	constexpr int kLen = 160;     // correlation length (20 ms)
+	constexpr float kMinConf = 0.70f;  // only override the stock tracker when clearly periodic
+
+	float ncc[kMaxLag + 2];
+	float best = 0.0f;
+	int bestLag = 0;
+	for (int L = kMinLag; L <= kMaxLag; ++L) {
+		const int s = 70 - (L / 2);   // both segments centred on sample 150
+		double sxy = 0.0, sxx = 0.0, syy = 0.0;
+		const Word16 *a = &pitch_est_buf[s];
+		const Word16 *b = &pitch_est_buf[s + L];
+		for (int n = 0; n < kLen; ++n) {
+			const double x = a[n];
+			const double y = b[n];
+			sxy += x * y;
+			sxx += x * x;
+			syy += y * y;
+		}
+		ncc[L] = (sxx > 1.0 && syy > 1.0) ? static_cast<float>(sxy / sqrt(sxx * syy)) : 0.0f;
+		if (ncc[L] > best) {
+			best = ncc[L];
+			bestLag = L;
+		}
+	}
+	ncc[kMinLag - 1 < 0 ? 0 : kMinLag - 1] = 0.0f;
+	ncc[kMaxLag + 1] = 0.0f;
+
+	if (best < kMinConf || bestLag == 0) {
+		robust_prev_lag = 0;
+		return;
+	}
+
+	// Shortest local maximum nearly as strong as the global one: the
+	int lag = bestLag;
+	for (int c = kMinLag; c < bestLag; ++c) {
+		const float prev = (c > kMinLag) ? ncc[c - 1] : 0.0f;
+		if (ncc[c] >= best - 0.08f && ncc[c] >= kMinConf && ncc[c] >= prev && ncc[c] >= ncc[c + 1]) {
+			lag = c;
+			break;
+		}
+	}
+
+	// Continuity with the previous frame (+-15 %) when that candidate is nearly as strong.
+	if (robust_prev_lag > 0) {
+		const int lo = (int)(robust_prev_lag * 0.85f);
+		const int hi = (int)(robust_prev_lag * 1.15f + 1.0f);
+		int cl = 0;
+		float cb = 0.0f;
+		for (int c = (lo < kMinLag ? kMinLag : lo); c <= (hi > kMaxLag ? kMaxLag : hi); ++c) {
+			if (ncc[c] > cb) {
+				cb = ncc[c];
+				cl = c;
+			}
+		}
+		if (cl > 0 && cb >= best - 0.10f && cb >= kMinConf) {
+			lag = cl;
+		}
+	}
+
+	// Parabolic interpolation for half-sample precision.
+	float delta = 0.0f;
+	if (lag > kMinLag && lag < kMaxLag) {
+		const float ym = ncc[lag - 1], y0 = ncc[lag], yp = ncc[lag + 1];
+		const float den = ym - 2.0f * y0 + yp;
+		if (fabsf(den) > 1e-6f) {
+			delta = 0.5f * (ym - yp) / den;
+			if (delta > 0.5f) delta = 0.5f;
+			if (delta < -0.5f) delta = -0.5f;
+		}
+	}
+	float period = (float)lag + delta;
+	if (period < 21.0f) period = 21.0f;     // IMBE pitch range: 21..122 samples
+	if (period > 122.0f) period = 122.0f;
+
+	const Word16 pitch_q15_1 = (Word16)lrintf(period * 2.0f);
+	float conf = ncc[lag];
+	if (conf < 0.0f) conf = 0.0f;
+	if (conf > 1.0f) conf = 1.0f;
+	Word16 ep = (Word16)lrintf((1.0f - conf) * 4096.0f * 0.9f);   // Q4.12
+	if (ep < 0) ep = 0;
+	if (ep > 4095) ep = 4095;
+
+	imbe_param->pitch = pitch_q15_1;
+	imbe_param->e_p = ep;
+	// Keep the stock tracker's look-back state coherent with what we actually sent.
+	prev_pitch = pitch_q15_1 - 42;
+	if (prev_pitch < 0) prev_pitch = 0;
+	if (prev_pitch > 202) prev_pitch = 202;
+	prev_e_p = ep;
+	robust_prev_lag = lag;
 }
 
 
@@ -97,10 +196,9 @@ void imbe_vocoder_impl::encode(IMBE_PARAM *imbe_param, Word16 *frame_vector, Wor
 	}
 
 	pitch_est(imbe_param, pitch_est_buf);
+	robust_pitch_override(imbe_param);
 
-    //
-	// Speech windowing and FFT calculation
-	//
+    // Speech windowing and FFT calculation
 	wr_ptr  = (Word16 *)wr;
 	sig_ptr = &pitch_ref_buf[40];
 	for(i = 146; i < 256; i++) 

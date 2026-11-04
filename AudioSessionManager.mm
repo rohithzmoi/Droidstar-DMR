@@ -159,10 +159,6 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
            withOptions:(AVAudioSessionCategoryOptions)options
                  error:(NSError * _Nullable __autoreleasing *)outError {
     // Qt 6.6.1's QDarwinAudioSink::open() calls setCategory(Ambient, 0) and
-    // QDarwinAudioSource::open() calls setCategory(PlayAndRecord, MixWithOthers),
-    // which strips AVAudioSessionCategoryOptionAllowBluetooth right before AudioUnitInitialize
-    // and forces the microphone off Bluetooth HFP back onto BuiltInMic.
-    // Always enforce PlayAndRecord with DefaultToSpeaker | AllowBluetooth.
     (void)category;
     (void)options;
 #if TARGET_OS_SIMULATOR
@@ -461,9 +457,7 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 }
 
 - (DSAudioSessionPolicy)desiredSessionPolicy {
-    // Always keep AVAudioSession in Duplex (PlayAndRecord + DefaultToSpeaker + AllowBluetooth).
-    // Keeping a single consistent Duplex category avoids tearing down and recreating QAudioSource/QAudioSink
-    // on PTT press/release, eliminating route switches, mic array overrides, and category races between threads.
+    // Always keep AVAudioSession in Duplex (PlayAndRecord + DefaultToSpeaker +
     return DSAudioSessionPolicyDuplex;
 }
 
@@ -691,8 +685,7 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
         return;
     }
 
-    // Do NOT call overrideOutputAudioPort:Speaker if DefaultToSpeaker already placed output on BuiltInSpeaker!
-    // Calling overrideOutputAudioPort:Speaker unnecessarily forces iOS onto the noisy far-field speakerphone mic array.
+    // Do NOT call overrideOutputAudioPort:Speaker if DefaultToSpeaker already placed output
     if (alreadyOnSpeaker && !onReceiverEarpiece) {
         return;
     }
@@ -1111,19 +1104,23 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
     } else if (interruptionType == AVAudioSessionInterruptionTypeEnded) {
         NSLog(@"[AudioSessionManager] Audio interruption ended");
 
-        AVAudioSession *session = [AVAudioSession sharedInstance];
-        NSError *error = nil;
-        BOOL success = [session setActive:YES error:&error];
+        // setActive: is a synchronous XPC call into mediaserverd (tens to hundreds of ms after
+        dispatch_async(_sessionQueue, ^{
+            AVAudioSession *session = [AVAudioSession sharedInstance];
+            NSError *error = nil;
+            BOOL success = [session setActive:YES error:&error];
 
-        if (success) {
-            _isAudioSessionActive = YES;
-            [self applySessionPolicy:YES reason:@"interruption"];
-            if (_isConnected) {
-                [self startKeepAliveAudio];
+            if (success) {
+                self->_isAudioSessionActive = YES;
+                [self applySessionPolicy:YES reason:@"interruption"];
+                if (self->_isConnected) {
+                    [self startKeepAliveAudio];
+                }
+            } else {
+                NSLog(@"[AudioSessionManager] Reactivation after interruption failed: %@", error.localizedDescription);
+                [self setupAVAudioSession];
             }
-        } else {
-            [self setupAVAudioSession];
-        }
+        });
     }
 }
 

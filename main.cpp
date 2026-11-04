@@ -12,6 +12,7 @@
 #include "LiveActivityQtBridge.h"
 #include "TranscriptionEngine.h"
 #include "NetReminderManager.h"
+#include "DmrSmsManager.h"
 
 
 
@@ -47,6 +48,9 @@ int main(int argc, char *argv[])
     // Expose instances to QML
     VUIDUpdater vuidUpdater;
     engine.rootContext()->setContextProperty("vuidUpdater", &vuidUpdater);
+
+    DmrSmsManager smsManager(&droidStarInstance, &vuidUpdater);
+    engine.rootContext()->setContextProperty("smsManager", &smsManager);
 
     LogHandler logHandler;
     engine.rootContext()->setContextProperty("logHandler", &logHandler);

@@ -19,6 +19,7 @@
 #include <cstring>
 #include <algorithm>
 #include <utility>
+#include <QSet>
 #include "dmr.h"
 #include "cgolay2087.h"
 #include "crs129.h"
@@ -135,6 +136,11 @@ void DMR::set_odtp_mode(bool enabled, int fallbackHbPort)
 
 DMR::~DMR()
 {
+    if (m_smsTxTimer) {
+        m_smsTxTimer->stop();
+        delete m_smsTxTimer;
+        m_smsTxTimer = nullptr;
+    }
     if (m_linkTimer) {
         m_linkTimer->stop();
         delete m_linkTimer;
@@ -478,7 +484,7 @@ void DMR::schedule_group_link(bool force)
         return;
     }
 
-    // TGIF Network parks directly on the newly keyed Talkgroup and never requires a 4000 unlink first
+    // TGIF Network parks directly on the newly keyed Talkgroup and never
     const bool needUnlink = !m_isTgif && (m_linkedGroupTg != 0U && m_linkedGroupTg != 4000U && m_linkedGroupTg != target);
     if (needUnlink) {
         m_autoLinkState = AUTOLINK_TX_UNLINK_4000;
@@ -522,7 +528,6 @@ void DMR::request_tgif_talkgroup_switch(uint32_t targetTg, bool forceFallback)
                             : QStringLiteral("tgif.network");
 
     // When tuning to TGIF Parrot (9990 or 31000), do not auto-key silence into Parrot;
-    // simply park any active group talkgroup on 4000 via the session API so group traffic stops.
     if (targetTg == 9990U || targetTg == 31000U) {
         if (m_linkedGroupTg != 0U && m_linkedGroupTg != 4000U) {
             if (!m_tgifNam) {
@@ -571,7 +576,7 @@ void DMR::request_tgif_talkgroup_switch(uint32_t targetTg, bool forceFallback)
             return;
         }
 
-        // Fallback to silent in-band DMR link burst if port 5040 is unreachable or session not yet indexed
+        // Fallback to silent in-band DMR link burst if port 5040 is
         if (m_flco == FLCO_GROUP && m_txdstid == targetTg) {
             schedule_group_link(true || forceFallback);
         }
@@ -665,13 +670,13 @@ bool DMR::shouldAcceptRxPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) c
         return (dstid == 4000U || srcid == 4000U);
     }
 
-    // When tuned to a normal TG or Private ID (m_txdstid != 4000), suppress background 4000 unlink announcements
+    // When tuned to a normal TG or Private ID (m_txdstid !=
     if (srcid == 4000U || dstid == 4000U) {
         return false;
     }
 
     if (isPrivate) {
-        // Accept Private Calls addressed to our DMR ID / ESSID, or from/to our target ID (e.g. Parrot 9990 / TGIF 31000)
+        // Accept Private Calls addressed to our DMR ID / ESSID, or from/to our target
         return (dstid == m_dmrid || dstid == m_essid ||
                 srcid == m_txdstid || dstid == m_txdstid ||
                 srcid == 9990U || srcid == 31000U || srcid == 5000U);
@@ -679,14 +684,13 @@ bool DMR::shouldAcceptRxPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) c
 
     // Incoming packet is a Group Call:
     if (m_flco == FLCO_USER_USER) {
-        // In Private Call mode, only accept group packets if they match our target ID (e.g. TGIF Parrot 9990 / 31000)
+        // In Private Call mode, only accept group packets if they match
         return (dstid == m_txdstid || srcid == m_txdstid ||
                 dstid == m_dmrid || dstid == m_essid ||
                 srcid == 9990U || srcid == 31000U);
     }
 
-    // In Group Call mode, accept Group Calls matching the currently selected Talkgroup,
-    // or Parrot echo replies addressed to our DMR ID / ESSID, or TGIF 777 Scan traffic
+    // In Group Call mode, accept Group Calls matching the currently selected
     if (dstid == m_txdstid || dstid == m_dmrid || dstid == m_essid) {
         return true;
     }
@@ -702,6 +706,108 @@ bool DMR::shouldAcceptRxPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) c
     }
 
     return false;
+}
+
+bool DMR::shouldAcceptRxDataPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) const
+{
+    if (srcid == 0U || dstid == 0U) {
+        return false;
+    }
+    if (isPrivate) {
+        // Data calls are asynchronous and must not be filtered by the selected voice TG.
+        return dstid == m_dmrid || dstid == m_essid ||
+               (m_flco == FLCO_USER_USER && (srcid == m_txdstid || dstid == m_txdstid));
+    }
+    return dstid == m_txdstid || dstid == m_linkedGroupTg ||
+           dstid == m_dmrid || dstid == m_essid;
+}
+
+void DMR::send_sms(int msgId, uint32_t dstId, const QString &text, bool isGroup, int format)
+{
+    if (!m_udp || m_modeinfo.status != CONNECTED_RW || m_dmrid == 0U ||
+        dstId == 0U || text.trimmed().isEmpty()) {
+        emit sms_send_status(msgId, 3, QStringLiteral("DMR is not connected or message is empty"));
+        return;
+    }
+
+    if (m_odtp) {
+        const QByteArray payload = DmrDataCodec::encodeOdtpTextPayload(
+            m_dmrid, dstId, isGroup, text.trimmed());
+        if (payload.isEmpty()) {
+            emit sms_send_status(msgId, 3, QStringLiteral("Unable to encode ODTP text"));
+            return;
+        }
+        send_odtp_packet(REWIND_TYPE_MESSAGE_TEXT, REWIND_FLAG_NONE,
+                         payload.constData(), static_cast<uint16_t>(payload.size()));
+        emit sms_send_status(msgId, 1, QStringLiteral("ODTP"));
+        return;
+    }
+
+    const bool includeCsbkPreamble = (format & 0x100) == 0;
+    const int boundedFormat = std::clamp(format & 0xFF, 0, 3);
+    const auto frames = DmrDataCodec::encodeSmsSequence(
+        m_dmrid, dstId, m_essid, m_txslot, m_txcc, isGroup,
+        text.trimmed(), static_cast<DmrDataCodec::SmsFormat>(boundedFormat),
+        includeCsbkPreamble);
+    if (frames.isEmpty()) {
+        emit sms_send_status(msgId, 3, QStringLiteral("Unable to encode DMR data message"));
+        return;
+    }
+    for (int i = 0; i < frames.size(); ++i) {
+        m_smsTxQueue.enqueue(PendingSmsBurst{
+            msgId, i == frames.size() - 1, frames.at(i)
+        });
+    }
+    if (!m_smsTxTimer) {
+        m_smsTxTimer = new QTimer(this);
+        m_smsTxTimer->setTimerType(Qt::PreciseTimer);
+        m_smsTxTimer->setInterval(static_cast<int>(DMR_SLOT_TIME));
+        connect(m_smsTxTimer, &QTimer::timeout, this, &DMR::process_sms_tx_queue);
+    }
+    if (!m_smsTxTimer->isActive()) {
+        m_smsTxTimer->start();
+    }
+}
+
+void DMR::process_sms_tx_queue()
+{
+    if (!m_udp || m_modeinfo.status != CONNECTED_RW) {
+        QSet<int> failed;
+        while (!m_smsTxQueue.isEmpty()) {
+            const PendingSmsBurst item = m_smsTxQueue.dequeue();
+            if (item.msgId >= 0) failed.insert(item.msgId);
+        }
+        if (m_smsTxTimer) m_smsTxTimer->stop();
+        for (int id : std::as_const(failed)) {
+            emit sms_send_status(id, 3, QStringLiteral("DMR disconnected during send"));
+        }
+        return;
+    }
+
+    // Voice PTT, the scanner's auto-TX punch, and the HomeBrew auto-link
+    // state machine always have priority over packet data.
+    if (m_tx || m_autoTxPunch.load(std::memory_order_relaxed) ||
+        m_autoLinkState != AUTOLINK_IDLE ||
+        (m_txtimer && m_txtimer->isActive()) ||
+        m_modeinfo.stream_state == STREAM_NEW ||
+        m_modeinfo.stream_state == STREAMING) {
+        return;
+    }
+    if (m_smsTxQueue.isEmpty()) {
+        if (m_smsTxTimer) m_smsTxTimer->stop();
+        return;
+    }
+
+    const PendingSmsBurst item = m_smsTxQueue.dequeue();
+    if (item.dmrdFrame.size() == 55) {
+        m_udp->writeDatagram(item.dmrdFrame, m_address, m_modeinfo.port);
+    }
+    if (item.isLastBurst && item.msgId >= 0) {
+        emit sms_send_status(item.msgId, 1, QStringLiteral("HomeBrew DMRD"));
+    }
+    if (m_smsTxQueue.isEmpty() && m_smsTxTimer) {
+        m_smsTxTimer->stop();
+    }
 }
 
 void DMR::set_dmr_params(uint8_t essid, QString password, QString lat, QString lon, QString location, QString desc, QString freq, QString url, QString swid, QString pkid, QString options)
@@ -794,7 +900,7 @@ void DMR::update_odtp_subscription(bool force)
         return;
     }
 
-    // In Group Call mode, subscribe to the selected TG (except 0, 4000 Unlink, or 9990 Parrot Private)
+    // In Group Call mode, subscribe to the selected TG (except 0
     const uint32_t desiredGroupTg =
         (m_flco == FLCO_GROUP && m_txdstid > 0U && m_txdstid != 4000U && m_txdstid != 9990U)
             ? m_txdstid
@@ -806,13 +912,13 @@ void DMR::update_odtp_subscription(bool force)
 
     const uint32_t prevTg = m_odtpSubscribedTg;
 
-    // 1. Cancel all previous active subscriptions on the BrandMeister master (0-byte payload cancels all)
+    // 1. Cancel all previous active subscriptions on the BrandMeister master (0-byte
     send_odtp_packet(REWIND_TYPE_CANCELLING, REWIND_FLAG_NONE, nullptr, 0U);
     m_odtpSubscribedTg = 0U;
     m_odtpSubscribedPrivateSelf = false;
     m_linkedGroupTg = 0U;
 
-    // 2. Always subscribe to Private Voice Calls addressed to our own 7-digit DMR ID (for Parrot 9990 & direct calls)
+    // 2. Always subscribe to Private Voice Calls addressed to our own 7-digit DMR ID
     if (m_dmrid > 0U) {
         uint8_t subPriv[8];
         writeLE32(subPriv + 0U, REWIND_SESSION_TYPE_PRIVATE_VOICE);
@@ -877,6 +983,7 @@ void DMR::handle_odtp_rx_header(uint32_t pktSrcId, uint32_t pktDstId, bool pktIs
 
     if (!sameStream) {
         m_rxcodecq.clear();
+        rxJitterReset();
         if (m_audio) {
             m_audio->start_playback();
         }
@@ -916,6 +1023,8 @@ void DMR::process_odtp_udp(const QByteArray &buf)
         pktType != REWIND_TYPE_DMR_VOICE_HEADER &&
         pktType != REWIND_TYPE_SUPER_HEADER &&
         pktType != REWIND_TYPE_DMR_EMBEDDED_DATA &&
+        pktType != REWIND_TYPE_MESSAGE_TEXT &&
+        pktType != REWIND_TYPE_MESSAGE_STATUS &&
         (m_modeinfo.stream_state == STREAM_LOST || m_modeinfo.stream_state == STREAM_END)) {
         if (!m_rxtimer || !m_rxtimer->isActive()) {
             m_modeinfo.stream_state = STREAM_IDLE;
@@ -1111,6 +1220,7 @@ void DMR::process_odtp_udp(const QByteArray &buf)
             m_modeinfo.stream_state == STREAM_END ||
             m_modeinfo.stream_state == STREAM_IDLE) {
             m_rxcodecq.clear();
+            rxJitterReset();
             m_audio->start_playback();
             if (!m_rxtimer->isActive()) {
                 m_rxtimer->start(m_rxtimerint);
@@ -1171,6 +1281,48 @@ void DMR::process_odtp_udp(const QByteArray &buf)
         return;
     }
 
+    case REWIND_TYPE_MESSAGE_TEXT: {
+        DmrDataCodec::DecodedSms sms;
+        if (!DmrDataCodec::decodeOdtpTextPayload(payload, payloadLen, sms)) {
+            emit update_log("DMR SMS: malformed ODTP text message ignored");
+            return;
+        }
+        const bool addressedToUs = sms.dstId == m_dmrid || sms.dstId == m_essid;
+        const bool subscribedGroup = sms.isGroup &&
+            (sms.dstId == m_txdstid || sms.dstId == m_odtpSubscribedTg);
+        if (!addressedToUs && !subscribedGroup) {
+            return;
+        }
+        if (!sms.isGroup) {
+            const QByteArray ack = DmrDataCodec::encodeOdtpStatusPayload(
+                m_dmrid, sms.srcId, 0x08U);
+            send_odtp_packet(REWIND_TYPE_MESSAGE_STATUS, REWIND_FLAG_NONE,
+                             ack.constData(), static_cast<uint16_t>(ack.size()));
+        }
+        emit update_log(QString("DMR SMS RX from %1 to %2 (ODTP): %3")
+                        .arg(sms.srcId).arg(sms.dstId).arg(sms.text));
+        emit sms_received(sms.srcId, sms.dstId, sms.text, sms.isGroup,
+                          QStringLiteral("ODTP"));
+        return;
+    }
+
+    case REWIND_TYPE_MESSAGE_STATUS: {
+        uint32_t statusSrc = 0U;
+        uint32_t statusDst = 0U;
+        uint8_t status = 0U;
+        if (DmrDataCodec::decodeOdtpStatusPayload(
+                payload, payloadLen, statusSrc, statusDst, status) &&
+            (statusDst == m_dmrid || statusDst == m_essid ||
+             statusSrc == m_dmrid || statusSrc == m_essid)) {
+            const uint32_t peerId = (statusDst == m_dmrid || statusDst == m_essid)
+                                    ? statusSrc
+                                    : statusDst;
+            const bool ok = ((status & 0xC0U) == 0U) && (((status >> 3U) & 0x07U) == 1U);
+            emit sms_ack_received(peerId, ok);
+        }
+        return;
+    }
+
     default:
         return;
     }
@@ -1212,7 +1364,7 @@ void DMR::process_udp()
 
     if ((buf.size() >= 6) && (::memcmp(buf.data() + 3, "NAK", 3U) == 0)) {
         if (m_modeinfo.status == CONNECTED_RW) {
-            // Master lost session state (e.g. NAT rebind or BM/TGIF master restart); seamlessly re-login
+            // Master lost session state (e.g. NAT rebind or BM/TGIF master restart)
             emit update_log("DMR: session expired (MSTNAK), re-authenticating...");
             m_modeinfo.status = CONNECTING;
             out.clear();
@@ -1227,8 +1379,7 @@ void DMR::process_udp()
             m_udp->writeDatagram(out, m_address, m_modeinfo.port);
             return;
         } else if (m_isTgif && !m_tgifTriedDefaultPass && m_password != QStringLiteral("passw0rd")) {
-            // If user configured a custom TGIF password in Settings, but their TGIF account has not enabled
-            // Hotspot Security (so TGIF expects the default "passw0rd"), automatically retry once with "passw0rd".
+            // If user configured a custom TGIF password in Settings, but their TGIF account has
             m_tgifTriedDefaultPass = true;
             m_password = QStringLiteral("passw0rd");
             m_modeinfo.status = CONNECTING;
@@ -1358,8 +1509,7 @@ void DMR::process_udp()
         (::memcmp(buf.data(), "DMRD", 4U) == 0) &&
         (m_modeinfo.status == CONNECTED_RW))
     {
-        // Ignore incoming RX packets while transmitting (simplex hotspot) so they
-        // never corrupt stream_state or streamid while m_rxtimer is stopped.
+        // Ignore incoming RX packets while transmitting (simplex hotspot) so they never
         if (m_tx) {
             return;
         }
@@ -1380,13 +1530,46 @@ void DMR::process_udp()
             }
         }
 
-        // Data bursts are not voice. Drop them so they never touch the
-        // voice stream, audio engine, or QSO log.
+        // Packet-data calls have their own addressing and lifecycle. Process
+        // them before the selected voice-TG filter and return without touching
+        // m_modeinfo, AudioEngine, transcription, QSO logging, or link state.
         if (pktIsDataSync) {
             const uint8_t dataType = pktFlags & DT_MASK;
             if (dataType == DT_CSBK || dataType == DT_DATA_HEADER ||
                 dataType == DT_RATE_12_DATA || dataType == DT_RATE_34_DATA ||
                 dataType == DT_RATE_1_DATA) {
+                if (shouldAcceptRxDataPacket(pktSrcId, pktDstId, pktIsPrivate)) {
+                    const uint8_t rxSlot = (pktFlags & 0x80U) ? 2U : 1U;
+                    const auto result = m_smsAssembler.processBurst(
+                        pktSrcId, pktDstId, rxSlot, pktIsPrivate, dataType,
+                        reinterpret_cast<const uint8_t *>(buf.constData() + 20),
+                        m_dmrid, m_essid, m_txcc);
+
+                    if (!result.autoAckDmrdFrames.isEmpty()) {
+                        for (const QByteArray &frame : result.autoAckDmrdFrames) {
+                            m_smsTxQueue.enqueue(PendingSmsBurst{-1, false, frame});
+                        }
+                        if (!m_smsTxTimer) {
+                            m_smsTxTimer = new QTimer(this);
+                            m_smsTxTimer->setTimerType(Qt::PreciseTimer);
+                            m_smsTxTimer->setInterval(static_cast<int>(DMR_SLOT_TIME));
+                            connect(m_smsTxTimer, &QTimer::timeout,
+                                    this, &DMR::process_sms_tx_queue);
+                        }
+                        if (!m_smsTxTimer->isActive()) m_smsTxTimer->start();
+                    }
+                    if (result.valid) {
+                        if (result.isAck) {
+                            emit sms_ack_received(result.srcId, result.ackSuccess);
+                        } else {
+                            emit update_log(QString("DMR SMS RX from %1 to %2 (%3): %4")
+                                            .arg(result.srcId).arg(result.dstId)
+                                            .arg(result.formatName, result.text));
+                            emit sms_received(result.srcId, result.dstId, result.text,
+                                              result.isGroup, result.formatName);
+                        }
+                    }
+                }
                 return;
             }
         }
@@ -1427,6 +1610,7 @@ void DMR::process_udp()
                 m_rxwatchdog = 0;
                 if (!m_tx) {
                     m_rxcodecq.clear();
+                    rxJitterReset();
                     m_audio->start_playback();
                     if (!m_rxtimer->isActive()) {
                         m_rxtimer->start(m_rxtimerint);
@@ -1469,6 +1653,7 @@ void DMR::process_udp()
                           (m_modeinfo.stream_state == STREAM_IDLE) ||
                           (m_modeinfo.streamid != 0U && m_modeinfo.streamid != pktStreamId))) {
                 m_rxcodecq.clear();
+                rxJitterReset();
                 m_audio->start_playback();
                 if (!m_rxtimer->isActive()) {
                     m_rxtimer->start(m_rxtimerint);
@@ -1527,7 +1712,7 @@ void DMR::process_udp()
                     m_rxcodecq.append(dmr3ambe[j + (9 * i)]);
                 }
             }
-            // Throttle cross-thread UI updates during continuous voice streaming (emit on STREAM_NEW and Audio Sync frames)
+            // Throttle cross-thread UI updates during continuous voice streaming (emit on
             if (m_modeinfo.stream_state == STREAM_NEW || (pktFlags & 0x10U) != 0U) {
                 emit update(m_modeinfo);
             }
@@ -1726,6 +1911,18 @@ void DMR::send_ping()
 void DMR::send_disconnect()
 {
     if (!m_udp) return;
+    if (m_smsTxTimer) {
+        m_smsTxTimer->stop();
+    }
+    QSet<int> cancelledSms;
+    while (!m_smsTxQueue.isEmpty()) {
+        const PendingSmsBurst item = m_smsTxQueue.dequeue();
+        if (item.msgId >= 0) cancelledSms.insert(item.msgId);
+    }
+    for (int id : std::as_const(cancelledSms)) {
+        emit sms_send_status(id, 3, QStringLiteral("Disconnected before DMR data send completed"));
+    }
+    m_smsAssembler.reset();
     if (m_linkTimer) {
         m_linkTimer->stop();
     }
@@ -1820,14 +2017,13 @@ void DMR::transmit()
         m_autoLinkState = AUTOLINK_IDLE;
     }
 
-    // When stop_tx() sets m_tx = false, immediately send DT_TERMINATOR_WITH_LC
-    // on the next tick without blocking on microphone sample availability.
+    // When stop_tx() sets m_tx = false, immediately send DT_TERMINATOR_WITH_LC on the
     if (!m_tx) {
         send_frame();
         return;
     }
 
-    uint8_t ambe[72];
+    uint8_t ambe[72] = {0}; // never key uninitialised stack bytes on air if the vocoder is not loaded
     int16_t pcm[160];
 
 #ifdef USE_FLITE
@@ -2411,7 +2607,8 @@ void DMR::process_rx_data()
         cnt = 0;
     }
 
-    if((!m_tx) && (m_rxcodecq.size() > 8) ){
+    if((!m_tx) && rxJitterReady(9)){
+        m_rxConcealRun = 0;
         for(int i = 0; i < 9; ++i){
             ambe[i] = m_rxcodecq.dequeue();
         }
@@ -2440,12 +2637,23 @@ void DMR::process_rx_data()
             emit update_output_level(m_audio->level());
         }
     }
+    else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && rxShouldConceal()){
+        // Late/missing network frame: keep the speaker fed with a vocoder lost-frame
+#ifdef USE_MD380_VOCODER
+        memset(pcm, 0, 160 * sizeof(int16_t));
+#else
+        m_mbevocoder->conceal_2450x1150(pcm);
+#endif
+        m_audio->write(pcm, 160);
+        emit update_output_level(m_audio->level());
+    }
     else if ( ((m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_IDLE)) && (m_rxmodemq.size() < 50) ){
         m_rxtimer->stop();
         m_audio->stop_playback();
         m_rxwatchdog = 0;
         m_modeinfo.streamid = 0;
         m_rxcodecq.clear();
+        rxJitterReset();
         qDebug() << "DMR playback stopped";
         m_modeinfo.stream_state = STREAM_IDLE;
         emit update_output_level(0);

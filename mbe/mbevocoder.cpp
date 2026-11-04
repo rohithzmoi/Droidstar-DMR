@@ -147,6 +147,44 @@ static inline int load_reg(const uint8_t val[], int len)
 		memcpy(pcm, p, samples * sizeof(int16_t));
 		resetAudio();
 	}
+
+    void MBEVocoder::conceal_2400x1200(int16_t *pcm)
+	{
+		// D-STAR lost frame: b0 = 125 (ambe_d[0..5] = 1,1,1,1,1,0 ; ambe_d[48] = 1)
+		memset(ambe_d, 0, 49);
+		ambe_d[0] = ambe_d[1] = ambe_d[2] = ambe_d[3] = ambe_d[4] = 1;
+		ambe_d[48] = 1;
+		m_errs2 = 0;
+		m_err_str[0] = 0;
+		mbe_processAmbe2400Dataf(m_audio_out_temp_buf, &m_errs2, m_err_str, ambe_d, m_mbelibParms->m_cur_mp, m_mbelibParms->m_prev_mp, m_mbelibParms->m_prev_mp_enhanced, 3);
+		static const float kOut = powf(10.0f, DSTAR_OUT_GAIN_DB / 20.0f);
+		for (int i = 0; i < 160; i++) m_audio_out_temp_buf[i] *= kOut;
+		processAudio();
+		int samples = 0;
+		int16_t *p = getAudio(samples);
+		memcpy(pcm, p, samples * sizeof(int16_t));
+		resetAudio();
+	}
+
+    void MBEVocoder::conceal_2450x1150(int16_t *pcm)
+	{
+		conceal_2450(pcm);
+	}
+
+    void MBEVocoder::conceal_2450(int16_t *pcm)
+	{
+		// AMBE+2 erasure frame: b0 = 120 (ambe_d[0..3] = 1, ambe_d[37..39] = 0), b1 bits = 0
+		char erasure[49];
+		memset(erasure, 0, sizeof(erasure));
+		erasure[0] = erasure[1] = erasure[2] = erasure[3] = 1;
+		m_errs2 = 0;
+		m_err_str[0] = 0;
+		processData(erasure);
+		int samples = 0;
+		int16_t *p = getAudio(samples);
+		memcpy(pcm, p, samples * sizeof(int16_t));
+		resetAudio();
+	}
 	
     void MBEVocoder::encode_2400x1200(int16_t *pcm, uint8_t *ambe)
 	{
@@ -299,10 +337,11 @@ static inline int load_reg(const uint8_t val[], int len)
 		ambe_frame[37] = (b[0] >> 2) & 1;
 		ambe_frame[38] = (b[0] >> 1) & 1;
 		ambe_frame[39] = b[0] & 1;
-		ambe_frame[40] = b[3] & 1;
-		ambe_frame[41] = (b[4] >> 2) & 1;
-		ambe_frame[42] = (b[4] >> 1) & 1;
-		ambe_frame[43] = b[4] & 1;
+		// DVSI AMBE-3000 rate-33 u3 bit assignment (ambe_d[40..43]): b4(2), b4(1), b4(0), b3(0)
+		ambe_frame[40] = (b[4] >> 2) & 1;
+		ambe_frame[41] = (b[4] >> 1) & 1;
+		ambe_frame[42] = b[4] & 1;
+		ambe_frame[43] = b[3] & 1;
 		ambe_frame[44] = b[5] & 1;
 		ambe_frame[45] = b[6] & 1;
 		ambe_frame[46] = b[7] & 1;

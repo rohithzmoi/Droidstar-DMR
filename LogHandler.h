@@ -22,6 +22,7 @@
 #include <QJsonArray>
 #include <QHash>
 #include <QMutex>
+#include <QThreadPool>
 #include <functional>
 
 class LogHandler : public QObject
@@ -29,6 +30,7 @@ class LogHandler : public QObject
     Q_OBJECT
 public:
     explicit LogHandler(QObject *parent = nullptr);
+    ~LogHandler() override;
 
     Q_INVOKABLE void saveLogAsync(const QString &fileName, const QJsonArray &logData);
     Q_INVOKABLE void loadLogAsync(const QString &fileName, std::function<void(QJsonArray)> callback);
@@ -52,6 +54,8 @@ private:
     QString lastSavedFilePath;
     mutable QMutex m_mutex;
     mutable QHash<QString, QJsonArray> m_cache;
+    // Single-threaded pool: async saves run strictly in submission order (an older
+    QThreadPool m_ioPool;
 };
 
 #if defined(Q_OS_IOS) && !defined(Q_OS_IOS_APP_EXTENSION)

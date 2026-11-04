@@ -46,7 +46,7 @@ public:
     AudioEngine(QString in, QString out);
     ~AudioEngine();
 
-    // Global lock-free audio enhancement controls (apply immediately across all active Mode threads)
+    // Global lock-free audio enhancement controls (apply immediately across all active Mode
     static void setGlobalNoiseMode(int mode);
     static int globalNoiseMode();
     static void setGlobalHdUpscale(bool enabled);
@@ -146,7 +146,12 @@ private:
     double m_playNextOutPos { 0.0 };
     float m_playPrevSample { 0.0f };
     std::array<float, 4> m_playHist{};
+    std::array<float, 640> m_rx16kBuf{};
     bool m_lastPlayHdMode { true };
+
+    // Speech RMS AGC state (target -18 dBFS speech level, true-peak governed)
+    float m_agcSpeechRms { 5500.0f };  // == kTargetRms so a new stream starts at unity gain
+    int m_agcHoldFrames { 0 };
 
     // 4th-order Linkwitz-Riley (two cascaded 2nd-order Butterworth biquads) filter state
     struct Biquad {

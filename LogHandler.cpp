@@ -14,6 +14,14 @@
 
 LogHandler::LogHandler(QObject *parent) : QObject(parent)
 {
+    m_ioPool.setMaxThreadCount(1);
+    m_ioPool.setExpiryTimeout(30000);
+}
+
+LogHandler::~LogHandler()
+{
+    // Wait for in-flight saves so a worker never touches a destroyed LogHandler (the lambdas
+    m_ioPool.waitForDone();
 }
 
 QString LogHandler::getFilePath(const QString &fileName) const
@@ -38,7 +46,7 @@ void LogHandler::saveLogAsync(const QString &fileName, const QJsonArray &logData
         QMutexLocker locker(&m_mutex);
         m_cache.insert(fileName, logData);
     }
-    (void)QtConcurrent::run([this, fileName, logData]() {
+    (void)QtConcurrent::run(&m_ioPool, [this, fileName, logData]() {
         const bool ok = saveLog(fileName, logData);
         // Ensure QML observers run on the UI thread
         QMetaObject::invokeMethod(this, [this, fileName, ok]() {
@@ -49,7 +57,7 @@ void LogHandler::saveLogAsync(const QString &fileName, const QJsonArray &logData
 
 void LogHandler::loadLogAsync(const QString &fileName, std::function<void(QJsonArray)> callback)
 {
-    (void)QtConcurrent::run([this, fileName, callback]() {
+    (void)QtConcurrent::run(&m_ioPool, [this, fileName, callback]() {
         QJsonArray logData = loadLog(fileName);
         callback(logData);
     });

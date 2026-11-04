@@ -228,6 +228,8 @@ void M17::process_udp()
     }
 	if((m_modeinfo.status != CONNECTED_RW) && (buf.size() == 4) && (::memcmp(buf.data(), "NACK", 4U) == 0)){
 		m_modeinfo.status = DISCONNECTED;
+		// Propagate the refusal; otherwise the UI stays in "Connecting" with no feedback.
+		emit update(m_modeinfo);
 	}
 	if((buf.size() == 4) && (::memcmp(buf.data(), "ACKN", 4U) == 0)){
 		if(m_modeinfo.status == CONNECTING){
@@ -261,6 +263,11 @@ void M17::process_udp()
 		emit update(m_modeinfo);
 	}
 	if((buf.size() == 54) && (::memcmp(buf.data(), "M17 ", 4U) == 0)){
+		// A reflector that still has us linked streams voice before (or instead of) ACKN;
+		// m_audio/m_rxtimer/m_c2 are only created on ACKN, so ignore voice until then.
+		if (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio) {
+			return;
+		}
 		uint16_t streamid = (buf.data()[4] << 8) | (buf.data()[5] & 0xff);
 		if( (m_modeinfo.streamid != 0) && (streamid != m_modeinfo.streamid) ){
 			qDebug() << "New streamid received before timeout";
@@ -277,6 +284,8 @@ void M17::process_udp()
 			m_modeinfo.dst = QString((char *)cs);
 			m_modeinfo.streamid = streamid;
 			m_audio->start_playback();
+			rxJitterReset();
+			m_haveLastC2 = false;
 
 			if((buf.data()[19] & 0x06U) == 0x04U){
 				m_modeinfo.type = 1;//"3200 Voice";
@@ -643,6 +652,8 @@ void M17::process_modem_data(QByteArray d)
 				qDebug() << "New RF stream from " << m_modeinfo.src << " to " << m_modeinfo.dst << " id == " << QString::number(m_modeinfo.streamid, 16) << "FN == " << fn << " ber == " << ber;
 
 				m_audio->start_playback();
+				rxJitterReset();
+				m_haveLastC2 = false;
 
 				if(!m_rxtimer->isActive()){
 	#ifdef Q_OS_WIN
@@ -976,11 +987,21 @@ void M17::process_rx_data()
 		cnt = 0;
 	}
 
-	if((!m_tx) && (m_rxcodecq.size() > 7) ){
+	if((!m_tx) && rxJitterReady(8)){
+		m_rxConcealRun = 0;
 		for(int i = 0; i < 8; ++i){
 			codec2[i] = m_rxcodecq.dequeue();
 		}
+		memcpy(m_lastC2, codec2, 8);
+		m_haveLastC2 = true;
 		decode_c2(pcm, codec2);
+		int s = get_mode() ? 160 : 320;
+		m_audio->write(pcm, s);
+		emit update_output_level(m_audio->level());
+	}
+	else if((!m_tx) && m_haveLastC2 && rxShouldConceal()){
+		// Late/missing frame: re-synthesise the last Codec2 frame (parameter repeat) instead of
+		decode_c2(pcm, m_lastC2);
 		int s = get_mode() ? 160 : 320;
 		m_audio->write(pcm, s);
 		emit update_output_level(m_audio->level());
@@ -991,6 +1012,8 @@ void M17::process_rx_data()
 		m_rxwatchdog = 0;
 		m_modeinfo.streamid = 0;
 		m_rxcodecq.clear();
+		rxJitterReset();
+		m_haveLastC2 = false;
 		m_rxmodemq.clear();
 		qDebug() << "M17 playback stopped";
 		m_modeinfo.stream_state = STREAM_IDLE;

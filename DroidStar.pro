@@ -20,7 +20,7 @@ ios:DEFINES += GGML_USE_ACCELERATE GGML_USE_METAL
 ios:QMAKE_IOS_DEPLOYMENT_TARGET=14.0
 ios:QMAKE_TARGET_BUNDLE_PREFIX = org.dudetronics
 ios:QMAKE_BUNDLE = droidstar
-ios:VERSION = 0.45.05
+ios:VERSION = 0.45.06
 ios:Q_ENABLE_BITCODE.name = ENABLE_BITCODE
 ios:Q_ENABLE_BITCODE.value = NO
 ios:QMAKE_MAC_XCODE_SETTINGS += Q_ENABLE_BITCODE
@@ -52,6 +52,8 @@ SOURCES += \
         chamming.cpp \
         crs129.cpp \
         dcs.cpp \
+        DmrDataCodec.cpp \
+        DmrSmsManager.cpp \
         dmr.cpp \
         droidstar.cpp \
         httpmanager.cpp \
@@ -156,7 +158,12 @@ resources.files = main.qml fontawesome-webfont.ttf \
                   ui2026/components/Toast.qml \
                   ui2026/components/DonateButtons.qml \
                   ui2026/components/TxButton.qml \
+                  ui2026/components/AppDialog.qml \
+                  ui2026/components/ChatAvatar.qml \
+                  ui2026/components/ChatPill.qml \
+                  ui2026/components/RoundIconButton.qml \
                   ui2026/pages/MainPage.qml \
+                  ui2026/pages/MessagesPage.qml \
                   ui2026/pages/ScanPage.qml \
                   ui2026/pages/SettingsPage.qml \
                   ui2026/pages/QsoPage.qml \
@@ -200,6 +207,8 @@ HEADERS += \
 	chamming.h \
 	crs129.h \
 	dcs.h \
+	DmrDataCodec.h \
+	DmrSmsManager.h \
 	dmr.h \
 	droidstar.h \
 	httpmanager.h \

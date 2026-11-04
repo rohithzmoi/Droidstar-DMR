@@ -73,6 +73,8 @@ private:
 	Word32 autocorr(Word16 *sigin, Word16 shift, Word16 scale_shift);
 	void e_p(Word16 *sigin, Word16 *res_buf);
 	void pitch_est(IMBE_PARAM *imbe_param, Word16 *frames_buf);
+	void robust_pitch_override(IMBE_PARAM *imbe_param);
+	int robust_prev_lag { 0 };
 	void sa_decode_init(void);
 	void sa_decode(IMBE_PARAM *imbe_param);
 	void sa_encode_init(void);

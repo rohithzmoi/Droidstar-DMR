@@ -68,6 +68,9 @@ private slots:
 private:
 	int m_txrate;
 	uint8_t m_txcan;
+	// last good Codec2 frame, re-decoded for concealment when a network frame is late
+	uint8_t m_lastC2[8] {};
+	bool m_haveLastC2 = false;
 };
 
 #endif // M17_H

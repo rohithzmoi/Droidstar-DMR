@@ -25,10 +25,12 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QHash>
+#include <QSet>
 
 class VUIDUpdater : public QObject
 {
@@ -56,6 +58,11 @@ public:
             setFetchedFirstName(cached.name);
             setFetchedCountry(cached.country);
             emit userLookupReady(data1, cached.callsign, cached.name, m_fetchedCountry);
+            return;
+        }
+        // IDs radioid.net does not know (hotspot/ESSID numbers, service IDs) would otherwise be
+        // re-queried on every new RX turn; remember misses for this session
+        if (m_unknownIds.contains(data1)) {
             return;
         }
 
@@ -121,7 +128,7 @@ private slots:
 
         QJsonObject jsonObject = json.object();
 
-        // radioid.net response (as per your logs) uses "rows": [ { "name": "...", "country": "..." } ]
+        // radioid.net response (as per your logs) uses "rows": [ { "name"
         // We'll also support older/alternate formats safely.
         QJsonArray list = jsonObject.value("rows").toArray();
         if (list.isEmpty()) {
@@ -130,6 +137,14 @@ private slots:
 
         if (list.isEmpty()) {
             qDebug() << "rows/results array is empty or missing.";
+            unsigned int missedId = QUrlQuery(reply->url()).queryItemValue(QStringLiteral("id")).toUInt();
+            if (!missedId) missedId = m_lastRequestedId;
+            if (missedId) {
+                if (m_unknownIds.size() >= 1024) {
+                    m_unknownIds.clear();
+                }
+                m_unknownIds.insert(missedId);
+            }
             reply->deleteLater();
             return;
         }
@@ -177,6 +192,7 @@ private:
         QString country;
     };
     QHash<unsigned int, CachedUser> m_cache;
+    QSet<unsigned int> m_unknownIds;
     QString m_fetchedFirstName;
     QString m_fetchedCountry;
     unsigned int m_lastRequestedId = 0;

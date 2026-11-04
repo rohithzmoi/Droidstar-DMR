@@ -2590,3 +2590,98 @@ const int golayMatrix[2048] = {
   256, 64, 13, 256, 2176, 2304, 8, 8, 8, 512, 1044, 32, 8, 1025, 34, 656, 8, 64, 128, 2054, 257, 512, 34, 69, 8, 512, 512, 512, 2176, 34,
   34, 256, 34, 512, 34, 1032, 80
 };
+
+#include <math.h>
+
+/*
+ * D-STAR (AMBE 3600x2400) pitch, harmonic count, and 250 Hz voicing-band
+ * overlap helpers calibrated against DVSI AMBE-3000 hardware (mbelib-neo).
+ */
+static inline float mbe_ambe2400_f0(int b0)
+{
+  return exp2f(-DSTAR_F0_C0 - DSTAR_F0_C1 * ((float)b0 + 0.5f));
+}
+
+static inline int mbe_ambe2400_harmonic_count(int b0)
+{
+  if (b0 >= 0 && b0 < 120) {
+    return (int)DSTAR_CHIP_L[b0];
+  }
+  const float f0 = mbe_ambe2400_f0(b0);
+  if (!(f0 > 0.0f)) {
+    return 9;
+  }
+  const int L = (int)(0.9254f * 0.5f / f0);
+  return (L < 9) ? 9 : ((L > 56) ? 56 : L);
+}
+
+/*
+ * Voicing of harmonic l from b1 (D-STAR AMBE 2400).
+ * On DVSI's AMBE-3000 each voiced 1 kHz band reaches 250 Hz (0.5 of a 500 Hz
+ * column) into the band below.
+ */
+static inline int mbe_ambe2400_harmonic_voiced(int b1, int l, float f0)
+{
+  const float column = (float)l * 16.0f * f0;
+  int own = (int)column;
+  int above = (int)(column + 0.5f);
+  if (own < 0) own = 0;
+  else if (own > 7) own = 7;
+  if (above < 0) above = 0;
+  else if (above > 7) above = 7;
+  const int row = b1 & 15;
+  return AmbePlusVuv[row][own] | AmbePlusVuv[row][above];
+}
+
+/*
+ * Smooth pitch law of DVSI's AMBE-3000 for AMBE+2 (3600x2450 / 2450):
+ * log2 f0 = -4.322605 - 0.0220427 * b0 (f0 in cycles per sample) for voice
+ * codes 0..119, and L = floor(0.9254 * 0.5 / f0) (gives L = 12 at b0 = 17).
+ */
+#define MBE_AMBE2450_LOG2_F0_OFFSET (-4.322605f)
+#define MBE_AMBE2450_LOG2_F0_SLOPE  0.0220427f
+
+static inline float mbe_ambe2450_f0(int b0)
+{
+  if (b0 < 0) b0 = 0;
+  else if (b0 > 119) b0 = 119;
+  return exp2f(MBE_AMBE2450_LOG2_F0_OFFSET - (MBE_AMBE2450_LOG2_F0_SLOPE * (float)b0));
+}
+
+static inline int mbe_ambe2450_harmonic_count(int b0)
+{
+  const int L = (int)(0.9254f * 0.5f / mbe_ambe2450_f0(b0));
+  return (L < 9) ? 9 : ((L > 56) ? 56 : L);
+}
+
+/*
+ * Precomputed DCT / IDCT cosine tables shared by AMBE 2400 and AMBE 2450
+ * encoders and decoders.
+ */
+struct ambe_dct_cache
+{
+  int inited;
+  float ri_cos[9][9];         /* [m][i] for m=1..8, i=1..8 */
+  float idct_cos[18][18][18]; /* [ji][j][k] for ji=1..17, j=1..ji, k=1..ji */
+};
+
+static inline const struct ambe_dct_cache *mbe_get_dct_cache(void)
+{
+  static struct ambe_dct_cache s_cache = { 0, {{0.0f}}, {{{0.0f}}} };
+  if (!s_cache.inited) {
+    for (int m = 1; m <= 8; ++m) {
+      for (int i = 1; i <= 8; ++i) {
+        s_cache.ri_cos[m][i] = cosf(((float)M_PI * (float)(m - 1) * ((float)i - 0.5f)) / 8.0f);
+      }
+    }
+    for (int ji = 1; ji <= 17; ++ji) {
+      for (int j = 1; j <= ji; ++j) {
+        for (int k = 1; k <= ji; ++k) {
+          s_cache.idct_cos[ji][j][k] = cosf(((float)M_PI * (float)(k - 1) * ((float)j - 0.5f)) / (float)ji);
+        }
+      }
+    }
+    s_cache.inited = 1;
+  }
+  return &s_cache;
+}

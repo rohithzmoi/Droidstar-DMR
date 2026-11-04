@@ -34,11 +34,19 @@ struct DSScheduledAlert {
 typedef void (*DSNotificationPermissionCallback)(bool granted);
 typedef void (*DSNotificationTapCallback)(const char *netId);
 typedef void (*DSNotificationDeliveredCallback)(const char *netId);
+typedef void (*DSSmsNotificationTapCallback)(const char *threadId);
+typedef void (*DSKeyboardHeightCallback)(double heightPts);
 
 void ios_notifications_init(DSNotificationTapCallback tapCb,
                             DSNotificationDeliveredCallback deliveredCb);
 void ios_notifications_request_permission(DSNotificationPermissionCallback cb);
 void ios_notifications_check_permission(DSNotificationPermissionCallback cb);
 void ios_notifications_replace_scheduled_alerts(const std::vector<DSScheduledAlert> &alerts);
+void ios_notifications_set_sms_tap_callback(DSSmsNotificationTapCallback tapCb);
+void ios_notifications_post_sms_alert(const QString &threadId,
+                                      const QString &title,
+                                      const QString &body);
+void ios_keyboard_observer_init(DSKeyboardHeightCallback cb);
+void ios_set_chat_keyboard_mode(bool active);
 
 #endif // IOS_NOTIFICATIONS_H

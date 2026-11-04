@@ -158,6 +158,7 @@ void REF::process_udp()
 				m_audio->start_playback();
 				m_rxtimer->start(m_rxtimerint);
 				m_rxcodecq.clear();
+				rxJitterReset();
 				m_modeinfo.stream_state = STREAM_NEW;
 				m_modeinfo.streamid = streamid;
 
@@ -769,7 +770,8 @@ void REF::process_rx_data()
 		}
 	}
 
-	if((!m_tx) && (m_rxcodecq.size() > 8) ){
+	if((!m_tx) && rxJitterReady(9)){
+		m_rxConcealRun = 0;
 		for(int i = 0; i < 9; ++i){
 			ambe[i] = m_rxcodecq.dequeue();
 		}
@@ -794,12 +796,19 @@ void REF::process_rx_data()
 			emit update_output_level(m_audio->level());
 		}
 	}
+	else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && rxShouldConceal()){
+		// Late/missing network frame: vocoder lost-frame repeat instead of starving the sink
+		m_mbevocoder->conceal_2400x1200(pcm);
+		m_audio->write(pcm, 160);
+		emit update_output_level(m_audio->level());
+	}
 	else if ( (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_LOST) ){
 		m_rxtimer->stop();
 		m_audio->stop_playback();
 		m_rxwatchdog = 0;
 		m_modeinfo.streamid = 0;
 		m_rxcodecq.clear();
+		rxJitterReset();
 		qDebug() << "REF playback stopped";
 		m_modeinfo.stream_state = STREAM_IDLE;
 		return;

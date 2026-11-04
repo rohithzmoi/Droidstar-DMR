@@ -104,6 +104,13 @@ private:
 	std::string m_fcsname;
 	bool m_txfullrate;
 	QQueue<uint8_t> m_rximbecodecq;
+	// VW (IMBE) jitter state, separate from the DN (AMBE) state in Mode so neither path can
+	// prime or conceal on the other's queue
+	bool m_rxImbePrimed = false;
+	int m_rxImbeConcealRun = 0;
+	uint8_t m_lastImbe[11] {};
+	bool m_haveLastImbe = false;
+	void rxImbeReset() { m_rxImbePrimed = false; m_rxImbeConcealRun = 0; m_haveLastImbe = false; }
 };
 
 #endif

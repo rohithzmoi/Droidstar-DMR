@@ -36,6 +36,15 @@ struct mbe_parameters
   float gamma;
   int un;
   int repeat;
+  float noiseSeed;
+  float noiseOverlap[96];
+  float previousUw[256];
+  float errorRate;
+  int errorCountTotal;
+  int errorCount4;
+  float localEnergy;
+  int amplitudeThreshold;
+  float mutingThreshold;
 };
 
 typedef struct mbe_parameters mbe_parms;
@@ -63,6 +72,9 @@ struct mbelibParms
 
 void mbe_checkGolayBlock (long int *block);
 int mbe_golay2312 (char *in, char *out);
+void mbe_golay2312_encode (const char in[12], char out[23]);
+int mbe_eccAmbe3600C0Counted (char ambe_fr[4][24]);
+int mbe_eccAmbe3600DataCounted (char ambe_fr[4][24], char *ambe_d);
 void encode_ambe(const IMBE_PARAM *, int b[], mbe_parms*cur_mp, mbe_parms*prev_mp, bool dstar, float gain_adjust, float *gain_state = nullptr);
 
 /*
@@ -97,9 +109,11 @@ void mbe_moveMbeParms (mbe_parms * cur_mp, mbe_parms * prev_mp);
 void mbe_useLastMbeParms (mbe_parms * cur_mp, mbe_parms * prev_mp);
 void mbe_initMbeParms (mbe_parms * cur_mp, mbe_parms * prev_mp, mbe_parms * prev_mp_enhanced);
 void mbe_spectralAmpEnhance (mbe_parms * cur_mp);
+float mbe_spectralAmpEnhanceWithRm0 (mbe_parms * cur_mp, float high_band_gain);
 void mbe_synthesizeSilencef (float *aout_buf);
 void mbe_synthesizeSilence (short *aout_buf);
 void mbe_synthesizeSpeechf (float *aout_buf, mbe_parms * cur_mp, mbe_parms * prev_mp, int uvquality);
+void mbe_synthesizeSpeechWithRm0f (float *aout_buf, mbe_parms * cur_mp, mbe_parms * prev_mp, int uvquality, float pre_enh_rm0, int is_repeat);
 void mbe_synthesizeSpeech (short *aout_buf, mbe_parms * cur_mp, mbe_parms * prev_mp, int uvquality);
 void mbe_floattoshort (float *float_buf, short *aout_buf);
 }
@@ -112,6 +126,10 @@ public:
 	void decode_2400x1200(int16_t *pcm, uint8_t *codec);
 	void decode_2450x1150(int16_t *pcm, uint8_t *codec);
 	void decode_2450(int16_t *pcm, uint8_t *codec);
+	// Packet-loss concealment: synthesize one 20 ms frame as the decoder's "lost
+	void conceal_2400x1200(int16_t *pcm);
+	void conceal_2450x1150(int16_t *pcm);
+	void conceal_2450(int16_t *pcm);
 	void encode_2400x1200(int16_t *pcm, uint8_t *codec);
 	void encode_2450x1150(int16_t *pcm, uint8_t *codec);
 	void encode_2450(int16_t *pcm, uint8_t *codec);
@@ -128,9 +146,7 @@ private:
 
     float m_audio_out_temp_buf[160];   //!< output of decoder
     float *m_audio_out_temp_buf_p;
-    //float m_aout_max_buf[200];
-    //float *m_aout_max_buf_p;
-    //int m_aout_max_buf_idx;
+    // float m_aout_max_buf[200]; float *m_aout_max_buf_p; int m_aout_max_buf_idx;
     short m_audio_out_buf[2*48000];    //!< final result - 1s of L+R S16LE samples
     short *m_audio_out_buf_p;
     int   m_audio_out_nb_samples;

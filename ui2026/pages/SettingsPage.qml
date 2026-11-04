@@ -30,6 +30,7 @@ Page {
     property var app: null
     required property var droidstarRef
     required property var appState
+    property var smsManagerRef: null
     property Component headerActions: null
 
     Tokens { id: t }
@@ -40,6 +41,8 @@ Page {
     readonly property real formWidth: contentLayout.width - 32
     readonly property int cols3: formWidth >= 520 ? 3 : (formWidth >= 300 ? 2 : 1)
     readonly property int cols2: formWidth >= 300 ? 2 : 1
+    // Password fields carry long placeholders plus a reveal button
+    readonly property int colsSecrets: formWidth >= 640 ? 3 : (formWidth >= 420 ? 2 : 1)
     // Switch tiles need room for label + description + switch
     readonly property int colsToggle: formWidth >= 480 ? 2 : 1
 
@@ -126,9 +129,7 @@ Page {
             width: Math.min(flick.width - 20, t.maxContentWidth)
             spacing: 12
 
-            // ─────────────────────────────────────────────────────────
             // IDENTITY
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Identity")
                 statusText: page.appState ? page.appState.callsign : ""
@@ -180,7 +181,7 @@ Page {
 
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: page.cols3
+                        columns: page.colsSecrets
                         columnSpacing: 10
                         rowSpacing: 10
 
@@ -201,7 +202,7 @@ Page {
                             onCommitted: function(v) { page.commitState("tgifPass", "set_tgif_password", v) }
                         }
                         FormField {
-                            Layout.columnSpan: page.cols3 === 2 ? 2 : 1
+                            Layout.columnSpan: page.colsSecrets === 2 ? 2 : 1
                             label: qsTr("ASL Password")
                             value: page.appState ? page.appState.aslPass : ""
                             password: true
@@ -213,9 +214,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // LIVE TRANSCRIPTION (Apple Neural Engine streaming or local Whisper)
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 id: transcriptionSection
                 readonly property bool appleSupported: !!(page.appState && page.appState.transcriptionAppleSupported)
@@ -466,7 +465,7 @@ Page {
                         }
                     }
 
-                    // Active parallel / queued model downloads list (persists across engine switches & tab changes)
+                    // Active parallel / queued model downloads list (persists across engine switches
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 6
@@ -546,9 +545,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // AUDIO & DEVICES
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Audio & Devices")
                 expanded: false
@@ -765,9 +762,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // D-STAR / ROUTING
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("D-STAR / Routing")
                 expanded: false
@@ -811,9 +806,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // PROFILE
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Profile / Location")
                 expanded: false
@@ -883,9 +876,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // DMR / TX OPTIONS
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("DMR / TX Options")
                 expanded: false
@@ -907,6 +898,50 @@ Page {
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: t.stroke }
 
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Label {
+                            text: qsTr("DMR Messaging Format")
+                            font.pixelSize: t.fsCaption
+                            color: t.textMuted
+                        }
+                        SearchableComboSheet {
+                            Layout.fillWidth: true
+                            model: [
+                                qsTr("Motorola M-SMS"),
+                                qsTr("AnyTone / DMR Standard (UTF-16LE)"),
+                                qsTr("ETSI Standard (UTF-16BE)"),
+                                qsTr("Chinese / Hytera Short Data")
+                            ]
+                            currentText: {
+                                var i = page.smsManagerRef ? page.smsManagerRef.defaultFormat : 0
+                                return model[Math.max(0, Math.min(model.length - 1, i))]
+                            }
+                            sheetTitle: qsTr("Default HomeBrew SMS Format")
+                            searchable: false
+                            onActivated: function(index) {
+                                if (page.smsManagerRef) page.smsManagerRef.defaultFormat = index
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("BrandMeister ODTP automatically translates messages for the recipient's radio. This format is used for HomeBrew, TGIF, FreeDMR, and ODTP fallback.")
+                            color: t.textMuted
+                            font.pixelSize: t.fsCaption
+                            wrapMode: Text.WordWrap
+                        }
+                        ToggleRow {
+                            visible: page.smsManagerRef !== null
+                            text: qsTr("CSBK Radio Wake-up Preamble")
+                            description: qsTr("Recommended. Sends three preamble blocks before HomeBrew SMS so sleeping handheld radios can synchronize.")
+                            checked: page.smsManagerRef ? page.smsManagerRef.sendPreambleCsbk : true
+                            onToggled: function(on) {
+                                if (page.smsManagerRef) page.smsManagerRef.sendPreambleCsbk = on
+                            }
+                        }
+                    }
+
                     GridLayout {
                         Layout.fillWidth: true
                         columns: page.cols2
@@ -916,7 +951,7 @@ Page {
                         FormField {
                             label: qsTr("DMR Options")
                             value: page.appState ? page.appState.dmrOptions : ""
-                            placeholderText: qsTr("Network options string")
+                            placeholderText: qsTr("Options string")
                             inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                             onEdited: function(v) { page.editState("dmrOptions", v) }
                             onCommitted: function(v) { page.commitState("dmrOptions", "set_dmr_options", v) }
@@ -947,9 +982,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // NETWORK
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Network & TX Behaviour")
                 expanded: false
@@ -995,9 +1028,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // MODEM TUNING (Advanced)
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Modem Tuning (Advanced)")
                 expanded: false
@@ -1021,9 +1052,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // MAINTENANCE
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Maintenance")
                 expanded: false
@@ -1081,9 +1110,7 @@ Page {
                 }
             }
 
-            // ─────────────────────────────────────────────────────────
             // TTS (only if USE_FLITE)
-            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Text-to-Speech")
                 expanded: false

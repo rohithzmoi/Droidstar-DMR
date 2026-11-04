@@ -1,10 +1,10 @@
 # Modified DroidStar DMR App for iOS & Android
 
-**Version 0.45.05**
+**Version 0.45.06**
 
 A free, open-source digital ham radio app for iPhone and iPad. DMR on BrandMeister, YSF, M17, P25, NXDN, D-STAR, and AllStar, from the phone in your pocket. Built and shared by VU3LVO.
 
-If you want the tour, the Parrot demo, the version history, and the photos, start at **[vu3lvo.com/droidstar](https://vu3lvo.com/droidstar)**. That page is home. This repository is the source.
+If you want the tour, the Parrot demo, the version history, and the photos, start at **[vu3lvo.com/droidstar](https://vu3lvo.com/droidstar)**. That page is home. This repository is the source. Full release notes live on the **[changelog](https://www.vu3lvo.com/droidstar/changelog)**.
 
 ## Important announcement
 
@@ -20,19 +20,37 @@ It is licensed under the GPL, it has no ads, and it does not ask you to subscrib
 
 This project uses Qt 6.
 
-## What's new in 0.45.05
+## What's new in 0.45.06
 
-One thing, and I wanted it to be the right thing.
+This one is about **DMR text messaging**, and clearer D-STAR voice.
 
-Transmit audio had a muffled, close-talk quality to it. Hold the phone near your mouth, key up, and the voice that came out the other end sounded like it was wrapped in a blanket. Reports were kind, then they were specific. So 0.45.05 is an audio pass only. The TX enhancement now lifts that muddiness off the microphone audio before it is encoded, so what leaves the phone is closer to the voice you actually used.
+### DMR Text Messaging (SMS / TMS)
 
-Nothing else moved in this build. The vocoder, receive audio, ODTP, the log, the scanner, all of that is the same app you had in 0.45.04. If you already liked how receive sounded, you should still like it. I would love to know how the new transmit sounds on your radio, your hotspot, and a headset. Those three never quite agree with each other.
+The headline feature. Send and receive short messages through BrandMeister to physical handhelds and mobiles, and get replies back on the phone. Works on BrandMeister ODTP and on HomeBrew.
 
-The longer story of 0.45.01 through 0.45.04, with the small notes I do not repeat here, is on [vu3lvo.com/droidstar](https://vu3lvo.com/droidstar).
+- Private and Talk Group messaging, with delivery status, acknowledgements, retry, and send/reply timing you can actually trust.
+- Four radio formats: Motorola TMS, DMR Standard (AnyTone), ETSI Standard, and Defined Short Data (Hytera / Chinese radios).
+- **SMS Standby** — stay connected for messaging without linking a voice Talk Group. Voice stays quiet until you pick a TG again. Choose the messaging host inside Messages.
+- Quick services from the phone: Echo (ECHO), Weather (WX), My GPS (GPS), Callsign SMS (SMSC), APRS gateway, Cell SMS (SMSGTE), DAPNET Pager, and Repeater info (RPT).
+- Faster Replies: `CONFIG DELAY 1` cuts BrandMeister's service wait from 2.5 s to 1 s. Undo with `CONFIG DELAY 3`.
+- Shortcuts from Last Heard, the station you are hearing now, and QSO log rows open the conversation in one tap.
+- Threaded chat with All / Unread / Private / Groups / Services filters, unread badges, search by callsign or DMR ID, swipe to reply or manage a thread, and history that survives a restart.
+
+Messaging needs a BrandMeister or HomeBrew DMR link and a valid DMR ID. Network rules for SMS services still apply.
+
+### Clearer D-STAR (and shared RX polish)
+
+D-STAR AMBE receive and transmit were reworked to sit closer to DVSI AMBE-3000 behaviour: better lost-frame handling on REF / XRF / DCS, less hiss on unvoiced speech, and levels that no longer jump on the first word after a pause. The shared synthesis work also helps DMR, YSF, and NXDN receive.
+
+Layouts on iPhone and iPad got another pass so text and rows stop hiding under the notch or home indicator. Audio session reactivation after a phone call or Siri no longer freezes the UI for a beat.
+
+The longer write-up is on the [changelog](https://www.vu3lvo.com/droidstar/changelog).
 
 ## What you get in the current iOS app
 
 Some of this landed over the last few releases. Some of it has been in the app since the first public builds. I am putting it in one place so you do not have to reconstruct the history from old posts.
+
+- **DMR Text Messaging.** See above. This is the big one in 0.45.06.
 
 - **BrandMeister ODTP.** Open DMR Terminal Protocol, on UDP port 54006, for BrandMeister hosts. Talk Groups change without the old key-up dance. If ODTP is not available, the app falls back to the usual HomeBrew protocol, so you are not stuck staring at a dead link. There is a switch in Settings if you want it off.
 
@@ -72,7 +90,7 @@ Android builds from 2024 are no longer something I am shipping or fixing. See th
 
 ## Feedback and support
 
-Please tell me if 0.45.05 sounds right on your radio. A parrot test on TG 9990 is the quickest way to hear yourself the way everyone else does. If the muffling is gone, I want to know. If it is still there on a particular headset or a particular network, I want to know that more.
+Please try messaging a radio you trust, and tell me how 0.45.06 feels. Echo on the Messages services list is the quickest smoke test; a parrot on TG 9990 is still the right check for voice. If delivery status lies, if a format fails on your handheld, or if D-STAR still sounds wrong on a particular reflector, I want that report.
 
 Ideas are welcome too. ODTP got built because a tester asked for it and then explained why. That is usually how the good ones start.
 
@@ -90,7 +108,7 @@ Thank you also to BD4VHI, who translated a build into Chinese back in September 
 
 This project, including the modifications, is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
 
-Your logs, settings, favourite Talk Groups, net reminders, and transcripts stay on the phone. There is no account and no analytics in the app. The networks you connect to still see your callsign and your DMR ID, the same way they would from a radio. The website does not use cookies or analytics either. The longer version is at [vu3lvo.com/droidstar/privacy](https://vu3lvo.com/droidstar/privacy).
+Your logs, settings, favourite Talk Groups, net reminders, transcripts, and message history stay on the phone. There is no account and no analytics in the app. The networks you connect to still see your callsign and your DMR ID, the same way they would from a radio. The website does not use cookies or analytics either. The longer version is at [vu3lvo.com/droidstar/privacy](https://vu3lvo.com/droidstar/privacy).
 
 ## Support
 
@@ -118,4 +136,4 @@ Everyone else is on the page. Please look. I did not want a README that slowly g
 
 Want to see your name there? [Buy me a coffee](https://buymeacoffee.com/rohithz), or [contribute via PayPal](https://www.paypal.com/ncp/payment/NU89529268M2W), and help me keep building a digital radio app that a licensed ham can actually use when the expensive radio, the antenna, and the space for either of them are not available.
 
-[vu3lvo.com/droidstar](https://vu3lvo.com/droidstar) · [Request a TestFlight invite](https://vu3lvo.com/droidstar/testflight) · [Contributors](https://vu3lvo.com/droidstar/contributors)
+[vu3lvo.com/droidstar](https://vu3lvo.com/droidstar) · [Changelog](https://www.vu3lvo.com/droidstar/changelog) · [Request a TestFlight invite](https://vu3lvo.com/droidstar/testflight) · [Contributors](https://vu3lvo.com/droidstar/contributors)

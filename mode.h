@@ -209,6 +209,32 @@ protected:
     QQueue<uint8_t> m_rxcodecq;
     QQueue<uint8_t> m_txcodecq;
     QQueue<uint8_t> m_rxmodemq;
+
+    // RX jitter buffer: prime 3 frames (60 ms) before the first dequeue, then conceal
+    bool m_rxJitterPrimed = false;
+    int m_rxJitterPrimeTicks = 0;
+    int m_rxConcealRun = 0;
+    void rxJitterReset() { m_rxJitterPrimed = false; m_rxJitterPrimeTicks = 0; m_rxConcealRun = 0; }
+    // True when a frame can be taken; false while priming. allowTickPrime=false
+    bool rxJitterReady(int frameBytes, bool allowTickPrime = true)
+    {
+        if (!m_rxJitterPrimed) {
+            if (m_rxcodecq.size() >= frameBytes * 3 || (allowTickPrime && ++m_rxJitterPrimeTicks >= 4)) {
+                m_rxJitterPrimed = true;
+            } else {
+                return false;
+            }
+        }
+        return m_rxcodecq.size() >= frameBytes;
+    }
+    // True when the stream is live but no frame arrived in
+    bool rxShouldConceal()
+    {
+        if (!m_rxJitterPrimed || m_modeinfo.stream_state != STREAMING) return false;
+        if (m_rxConcealRun >= 5) return false;
+        ++m_rxConcealRun;
+        return true;
+    }
     imbe_vocoder vocoder;
 #ifdef VOCODER_PLUGIN
     Vocoder *m_mbevocoder = nullptr;

@@ -19,6 +19,7 @@
 #define VOCODER_PLUGIN_H
 
 #include <cinttypes>
+#include <cstring>
 
 class Vocoder
 {
@@ -31,6 +32,9 @@ public:
 	virtual void encode_2400x1200(int16_t *pcm, uint8_t *codec) = 0;	// Provide pointer to 160 S_16_BE PCM frames as pcm, returns pointer to 72 bits as codec
 	virtual void encode_2450x1150(int16_t *pcm, uint8_t *codec) = 0;	// Provide pointer to 160 S_16_BE PCM frames as pcm, returns pointer to 72 bits as codec
 	virtual void encode_2450(int16_t *pcm, uint8_t *codec) = 0;			// Provide pointer to 160 S_16_BE PCM frames as pcm, returns pointer to 49 bits as codec
+	virtual void conceal_2400x1200(int16_t *pcm) { if (pcm) memset(pcm, 0, 160 * sizeof(int16_t)); }
+	virtual void conceal_2450x1150(int16_t *pcm) { if (pcm) memset(pcm, 0, 160 * sizeof(int16_t)); }
+	virtual void conceal_2450(int16_t *pcm) { if (pcm) memset(pcm, 0, 160 * sizeof(int16_t)); }
 	virtual void resetRx() {}
 	virtual void resetTx() {}
 	virtual void reset() { resetRx(); resetTx(); }

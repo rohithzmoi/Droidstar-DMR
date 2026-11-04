@@ -66,6 +66,11 @@ public:
     Q_INVOKABLE QVariantMap getHoselineStatus() const;
 
     Q_INVOKABLE void updateNowPlayingRX(const QString& callsign, const QString& name, const QString& country);
+    Q_INVOKABLE QString lookupCallsignForDmrId(uint32_t dmrId) const;
+    Q_INVOKABLE uint32_t lookupDmrIdForCallsign(const QString &callsign) const;
+    Q_INVOKABLE QVariantList searchDmrContacts(const QString &query, int limit = 15) const;
+    Q_INVOKABLE bool isDmrConnected() const;
+    void requestDmrSms(int msgId, uint32_t dstId, const QString &text, bool isGroup, int format);
     void setup_state_change_listeners();
     
 
@@ -111,6 +116,10 @@ signals:
     void dst_changed(QString);
     void debug_changed(bool);
     void update_devices();
+    void send_dmr_sms(int msgId, uint32_t dstId, const QString &text, bool isGroup, int format);
+    void dmr_sms_received(uint32_t srcId, uint32_t dstId, const QString &text, bool isGroup, const QString &format);
+    void dmr_sms_send_status(int msgId, int status, const QString &detail);
+    void dmr_sms_ack_received(uint32_t srcId, bool success);
 public slots:
     void handle_background_state();
     void handle_foreground_state();
@@ -474,6 +483,7 @@ private:
     uint32_t m_dmr_srcid;
     uint32_t m_dmr_destid;
     QMap<uint32_t, QString> m_dmrids;
+    QHash<QString, uint32_t> m_callsignToDmrId;
     QMap<uint16_t, QString> m_nxdnids;
     char m_module;
     int m_port;
@@ -591,8 +601,11 @@ private:
     bool m_hoselineConnected { false };
     bool m_hoselineJoined { false };
     bool m_hoselineDirty { false };
+    int m_hoselineFailCount { 0 };
+    int m_hoselineBgTicks { 0 };
     QTimer *m_hoselineUiTimer { nullptr };
     QTimer *m_hoselineReconnectTimer { nullptr };
+    int hoselineRetryDelayMs(int baseMs);
 
     void initTalkgroupDirectory();
     void loadTalkgroupCache();

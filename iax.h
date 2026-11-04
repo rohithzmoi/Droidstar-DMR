@@ -82,6 +82,7 @@ private:
 	uint8_t m_iseq;
 	uint8_t m_oseq;
 	QQueue<int16_t> m_audioq;
+	bool m_rxAudioPrimed = false; // 60 ms prefill before playout, re-armed after an underrun
 	uint32_t m_rxjitter;
 	uint32_t m_rxloss;
 	uint32_t m_rxframes;
