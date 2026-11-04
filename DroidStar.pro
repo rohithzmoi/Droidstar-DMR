@@ -1,5 +1,4 @@
 QT += quick quickcontrols2 network multimedia core gui concurrent
-//QT += xlsx
 
 unix:!ios:QT += serialport
 win32:QT += serialport
@@ -21,7 +20,7 @@ ios:DEFINES += GGML_USE_ACCELERATE GGML_USE_METAL
 ios:QMAKE_IOS_DEPLOYMENT_TARGET=14.0
 ios:QMAKE_TARGET_BUNDLE_PREFIX = org.dudetronics
 ios:QMAKE_BUNDLE = droidstar
-ios:VERSION = 0.44.37
+ios:VERSION = 0.45.05
 ios:Q_ENABLE_BITCODE.name = ENABLE_BITCODE
 ios:Q_ENABLE_BITCODE.value = NO
 ios:QMAKE_MAC_XCODE_SETTINGS += Q_ENABLE_BITCODE
@@ -136,15 +135,11 @@ ios:QMAKE_MAC_XCODE_SETTINGS += Q_SWIFT_VERSION Q_CLANG_ENABLE_MODULES Q_EMBED_S
                          
 
 
-resources.files = main.qml AboutTab.qml HostsTab.qml LogTab.qml MainTab.qml SettingsTab.qml fontawesome-webfont.ttf QsoTab.qml \
+resources.files = main.qml fontawesome-webfont.ttf \
                   qtquickcontrols2.conf \
                   images/droidstar.png \
                   images/droidstar_logo.png \
                   images/droidstar_logo_white.png \
-                  qml/AppShell.qml \
-                  qml/theme/Theme.qml \
-                  qml/components/AppCard.qml \
-                  qml/components/IconTabButton.qml \
                   ui2026/App2026.qml \
                   ui2026/theme/Tokens.qml \
                   ui2026/components/AppCard.qml \
@@ -286,20 +281,11 @@ LIBS += -lcodec2
 }
 !contains(DEFINES, VOCODER_PLUGIN){
 HEADERS += \
-	mbe/ambe3600x2400_const.h \
-	mbe/ambe3600x2450_const.h \
-	mbe/ecc_const.h \
-	mbe/mbelib.h \
-	mbe/mbelib_const.h \
-	mbe/mbelib_parms.h \
+	mbe/mbevocoder.h \
 	mbe/vocoder_plugin.h \
 	mbe/vocoder_plugin_api.h \
 	mbe/vocoder_tables.h
 SOURCES += \
-	mbe/ambe3600x2400.c \
-	mbe/ambe3600x2450.c \
-	mbe/ecc.c \
-	mbe/mbelib.c \
 	mbe/vocoder_plugin.cpp
 }
 

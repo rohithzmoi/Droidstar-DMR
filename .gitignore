@@ -1,0 +1,21 @@
+.DS_Store
+
+# Build output
+build/
+build_*/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+moc_*.cpp
+qrc_*.cpp
+*.o
+
+# Qt Creator / aqtinstall
+*.pro.user
+*.pro.user.*
+aqtinstall.log
+
+# Android local state
+android/.gradle/
+android/.idea/
+android/local.properties
