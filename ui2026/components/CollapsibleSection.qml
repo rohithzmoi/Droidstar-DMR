@@ -27,6 +27,8 @@ Item {
     property string title: ""
     // Optional status string shown in the header (e.g. "Connected")
     property string statusText: ""
+    // Optional shorter status used when the full text would not fit next to the title
+    property string statusTextShort: ""
     property string statusIcon: ""
     property color statusColor: t.accent
     property color statusIconColor: root.statusColor
@@ -50,6 +52,15 @@ Item {
     implicitHeight: headerRow.height + body.height + 8
 
     Tokens { id: t }
+
+    // Measured from the unwrapped strings so picking the short status never feeds back into the layout
+    TextMetrics { id: titleMetrics; font.bold: true; font.pixelSize: 15; text: root.title }
+    TextMetrics { id: statusMetrics; font.pixelSize: 12; text: root.statusText }
+    readonly property real _statusRoom: headerRow.width - 28 - Math.ceil(titleMetrics.advanceWidth) - 10 - 10 - 12
+    readonly property real _statusNeed: Math.ceil(statusMetrics.advanceWidth) + 19 + (root.statusIcon !== "" ? 16 : 0)
+    readonly property string _shownStatus: (root.statusTextShort !== "" && root.statusText !== "" &&
+                                            (_statusNeed > _statusRoom || _statusNeed > Math.max(110, headerRow.width * 0.5)))
+                                           ? root.statusTextShort : root.statusText
 
     Rectangle {
         anchors.fill: parent
@@ -106,7 +117,7 @@ Item {
 
                     // Responsive: cap width so it never crushes the title.
                     Layout.maximumWidth: Math.max(110, headerRow.width * 0.5)
-                    Layout.preferredWidth: Math.min(statusPillRow.implicitWidth + 18, statusPill.Layout.maximumWidth)
+                    Layout.preferredWidth: Math.min(Math.ceil(statusPillRow.implicitWidth) + 19, statusPill.Layout.maximumWidth)
 
                     RowLayout {
                         id: statusPillRow
@@ -128,7 +139,7 @@ Item {
                             id: statusTextLabel
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
-                            text: root.statusText
+                            text: root._shownStatus
                             font.pixelSize: 12
                             color: t.text
                             opacity: 0.92
@@ -172,9 +183,10 @@ Item {
             Loader {
                 id: contentLoader
                 y: 2
-                width: parent.width - root.contentPadding * 2
+                width: Math.max(0, parent.width - root.contentPadding * 2)
                 anchors.horizontalCenter: parent.horizontalCenter
-                active: true
+                // Hidden sections (e.g. features not built in) never lay out their content
+                active: root.visible || contentLoader.item !== null
             }
         }
     }

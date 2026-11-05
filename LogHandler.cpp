@@ -20,7 +20,8 @@ LogHandler::LogHandler(QObject *parent) : QObject(parent)
 
 LogHandler::~LogHandler()
 {
-    // Wait for in-flight saves so a worker never touches a destroyed LogHandler (the lambdas
+    // Wait for in-flight saves so a worker never touches a destroyed LogHandler
+    // (the lambdas below capture `this`) and the last QSO entry really reaches disk.
     m_ioPool.waitForDone();
 }
 
@@ -65,9 +66,14 @@ void LogHandler::loadLogAsync(const QString &fileName, std::function<void(QJsonA
 
 bool LogHandler::saveLog(const QString &fileName, const QJsonArray &logData)
 {
-    QMutexLocker locker(&m_mutex);
-    m_cache.insert(fileName, logData);
-    QString filePath = getFilePath(fileName);
+    QString filePath;
+    {
+        // Hold the lock only for the cache: the disk write below can take hundreds of ms on an
+        // old iPad and loadLog() on the GUI thread must not wait behind it.
+        QMutexLocker locker(&m_mutex);
+        m_cache.insert(fileName, logData);
+        filePath = getFilePath(fileName);
+    }
     if (filePath.isEmpty()) {
         return false;
     }

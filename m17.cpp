@@ -135,12 +135,17 @@ void M17::decode_callsign(uint8_t *callsign)
 	uint64_t coded = callsign[0];
 	for (int i=1; i<6; i++)
 		coded = (coded << 8) | callsign[i];
+	memcpy(code, callsign, 6);
+	// Always leave a NUL-terminated string: callers do QString((char*)callsign) on this buffer.
+	memset(callsign, 0, 10);
+	if (coded == 0xffffffffffffu) {
+		memcpy(callsign, "@ALL", 4);	// M17 broadcast address
+		return;
+	}
 	if (coded > 0xee6b27ffffffu) {
 		std::cerr << "Callsign code is too large, 0x" << std::hex << coded << std::endl;
 		return;
 	}
-	memcpy(code, callsign, 6);
-	memset(callsign, 0, 10);
 	int i = 0;
 	while (coded) {
 		if(i < 10){
@@ -165,7 +170,9 @@ void M17::set_mode(bool m)
 		m_c2 = codec2_create(CODEC2_MODE_1600);
 	}
 #else
-	m_c2->codec2_set_mode(m);
+	if(m_c2){
+		m_c2->codec2_set_mode(m);
+	}
 #endif
 }
 
@@ -283,6 +290,7 @@ void M17::process_udp()
 			decode_callsign(cs);
 			m_modeinfo.dst = QString((char *)cs);
 			m_modeinfo.streamid = streamid;
+			m_rxcodecq.clear();
 			m_audio->start_playback();
 			rxJitterReset();
 			m_haveLastC2 = false;
@@ -319,8 +327,10 @@ void M17::process_udp()
 			s = 16;
 		}
 
-		for(int i = 0; i < s; ++i){
-			m_rxcodecq.append((uint8_t )buf.data()[36+i]);
+		if(!m_tx){	// nothing is queued while we transmit
+			for(int i = 0; i < s; ++i){
+				m_rxcodecq.append((uint8_t )buf.data()[36+i]);
+			}
 		}
 
 		if(m_modeinfo.frame_number & 0x8000){ // EOT
@@ -702,7 +712,7 @@ void M17::process_modem_data(QByteArray d)
 
 			uint8_t dst[10];
 			memset(dst, ' ', 9);
-			memcpy(dst, m_refname.toLocal8Bit(), m_refname.size());
+			memcpy(dst, m_refname.toLocal8Bit().constData(), qMin<qsizetype>(m_refname.size(), 8));
 			dst[8] =  m_module;
 			dst[9] = 0x00;
 			encode_callsign(dst);
@@ -746,6 +756,10 @@ void M17::toggle_tx(bool tx)
 
 void M17::start_tx()
 {
+	// PTT can arrive before ACKN (codec and timers do not exist yet) or after a NACK.
+	if(!m_c2 || !m_txtimer || !m_audio){
+		return;
+	}
 	m_txtimerint = 38;
 	set_mode(m_txrate);
 	Mode::start_tx();
@@ -820,13 +834,13 @@ void M17::transmit()
 		uint8_t dst[10];
 		uint8_t lsf[30];
 		memset(dst, ' ', 9);
-		memcpy(dst, m_refname.toLocal8Bit(), m_refname.size());
+		memcpy(dst, m_refname.toLocal8Bit().constData(), qMin<qsizetype>(m_refname.size(), 8));
 
 		dst[8] =  m_module;
 		dst[9] = 0x00;
 		encode_callsign(dst);
 		memset(src, ' ', 9);
-		memcpy(src, m_modeinfo.callsign.toLocal8Bit(), m_modeinfo.callsign.size());
+		memcpy(src, m_modeinfo.callsign.toLocal8Bit().constData(), qMin<qsizetype>(m_modeinfo.callsign.size(), 8));
 		src[8] = 'D';
 		src[9] = 0x00;
 		encode_callsign(src);
@@ -895,12 +909,12 @@ void M17::transmit()
 		uint8_t src[10];
 		uint8_t dst[10];
 		memset(dst, ' ', 9);
-		memcpy(dst, m_refname.toLocal8Bit(), m_refname.size());
+		memcpy(dst, m_refname.toLocal8Bit().constData(), qMin<qsizetype>(m_refname.size(), 8));
 		dst[8] =  m_module;
 		dst[9] = 0x00;
 		encode_callsign(dst);
 		memset(src, ' ', 9);
-		memcpy(src, m_modeinfo.callsign.toLocal8Bit(), m_modeinfo.callsign.size());
+		memcpy(src, m_modeinfo.callsign.toLocal8Bit().constData(), qMin<qsizetype>(m_modeinfo.callsign.size(), 8));
 		src[8] = 'D';
 		src[9] = 0x00;
 		M17::encode_callsign(src);
@@ -1000,7 +1014,7 @@ void M17::process_rx_data()
 		emit update_output_level(m_audio->level());
 	}
 	else if((!m_tx) && m_haveLastC2 && rxShouldConceal()){
-		// Late/missing frame: re-synthesise the last Codec2 frame (parameter repeat) instead of
+		// Late/missing frame: re-synthesise the last Codec2 frame (parameter repeat) instead of starving the sink
 		decode_c2(pcm, m_lastC2);
 		int s = get_mode() ? 160 : 320;
 		m_audio->write(pcm, s);

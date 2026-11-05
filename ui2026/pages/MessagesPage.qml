@@ -52,14 +52,16 @@ Page {
                                            parseInt(appState.dmrtgid || "0") > 0)
     readonly property string restoreTg: app ? String(app.smsStandbyRestoreTg || "") : ""
 
-    // iOS reports the keyboard overlap natively (Qt's own window panning is disabled
+    // iOS reports the keyboard overlap natively (Qt's own window panning is disabled on this page).
+    // Android and desktop resize or pan the window themselves, so no inset is applied there.
     readonly property real safeBottom: (app && app.safeArea) ? app.safeArea.bottom : 0
     readonly property real keyboardOverlap: (page.visible && Qt.platform.os === "ios" && smsManagerRef)
                                             ? (smsManagerRef.keyboardHeight || 0) : 0
     readonly property real kbInset: Math.max(0, keyboardOverlap - safeBottom)
     property real kbAnimated: kbInset
     Behavior on kbAnimated { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
-    // Landscape phone with the keyboard up leaves ~100pt for the chat: compact
+    // Landscape phone with the keyboard up leaves ~100pt for the chat: compact header, no banners,
+    // so the composer is never pushed out of the pane
     readonly property bool cramped: kbAnimated > 0 && (height - kbAnimated) < 260
     // Keeps app toasts clear of the keyboard and, while a chat is open, of the composer bar
     readonly property real toastBottomInset: kbAnimated + ((selectedPeerId > 0 && (splitView || mobileThreadOpen))
@@ -78,7 +80,8 @@ Page {
         { label: qsTr("Talkgroups"), value: "group" },
         { label: qsTr("Services"), value: "service" }
     ]
-    // BrandMeister SMS services (private messages). 262993/262994/262995 are BM262 services
+    // BrandMeister SMS services (private messages). 262993/262994/262995 are BM262 services reachable
+    // network-wide; the APRS gateway is <master MCC>999. 9990 is the voice Parrot and ignores text.
     readonly property int aprsGatewayId: smsManagerRef
                                          ? smsManagerRef.aprsServiceIdForHost(appState ? appState.selectedHost : "")
                                          : 262999
@@ -119,7 +122,7 @@ Page {
         return [_preset(qsTr("73 de %1").arg(myCall)), _preset(qsTr("QSL, loud & clear! 73")),
                 _preset("QTH?"), _preset(qsTr("PSE QSY TG"), "PSE QSY TG ")]
     }
-    // Service threads always offer their commands; personal chats show replies on
+    // Service threads always offer their commands; personal chats show replies on demand or when empty
     readonly property bool showPresets: selectedPeerId > 0 && quickPresets.length > 0 &&
                                         (presetsOpen || (servicePeer && !parrotPeer) ||
                                          (messageModel.count === 0 && composer.length === 0))
@@ -366,7 +369,8 @@ Page {
             composer.cursorPosition = composer.length
     }
 
-    // Menus close the keyboard while open (so they are never hidden behind
+    // Menus close the keyboard while open (so they are never hidden behind it) and give it
+    // back on dismissal if it was up; choosing an action leaves it closed.
     property Item _keyboardOwner: null
     function suspendKeyboard() {
         var fi = page.Window.activeFocusItem
@@ -420,7 +424,8 @@ Page {
         return page.smsManagerRef.sendMessage(String(peerId), body, !!isGroup, fmt)
     }
 
-    // BM262 services pause 2.5 s before answering so radios can drop out
+    // BM262 services pause 2.5 s before answering so radios can drop out of transmit.
+    // CONFIG ON + CONFIG DELAY 1 (the minimum) applies per DMR ID on 262993 and 262995.
     function enableFastReplies() {
         if (!page.smsManagerRef) return
         if (!page.connectedDmr) {
@@ -562,8 +567,11 @@ Page {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // MENUS & DIALOGS
-    // Message actions: the held bubble lifts in place over a dimmed page
+    // ─────────────────────────────────────────────────────────
+    // Message actions: the held bubble lifts in place over a dimmed page with its menu attached
+    // (iMessage / Telegram style). Conversation actions use a plain bottom sheet.
     Popup {
         id: actionSheet
         parent: Overlay.overlay
@@ -687,7 +695,7 @@ Page {
                     id: liftBubble
                     readonly property var r: actionSheet.anchorRect || { x: 20, y: 200, w: 200, h: 44 }
                     readonly property real naturalH: liftBody.implicitHeight + liftMeta.implicitHeight + 19
-                    // Lowest y that keeps the menu above the keyboard / home
+                    // Lowest y that keeps the menu above the keyboard / home indicator, highest that keeps the caption visible
                     readonly property real maxY: actionSheet.bottomBound - liftLayer.gap - liftLayer.menuH - naturalH
                     readonly property real minY: actionSheet.topBound + liftLayer.captionH
                     readonly property bool menuAbove: maxY < minY
@@ -1038,7 +1046,8 @@ Page {
         fitHeightToContent: false
         // Fixed height (capped to the visible area) so the result list has room to scroll
         height: Math.min(640, availableDialogHeight)
-        // Landscape phone with the keyboard up leaves ~200pt: drop the title, hint
+        // Landscape phone with the keyboard up leaves ~200pt: drop the title, hint and footer so the
+        // search field and at least one suggestion stay visible (tap outside still dismisses)
         readonly property bool cramped: availableDialogHeight < 360
         title: cramped ? "" : qsTr("New DMR Message")
         standardButtons: cramped ? Dialog.NoButton : Dialog.Cancel
@@ -1252,8 +1261,12 @@ Page {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // SMALL BUILDING BLOCKS
+    // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────
     // LAYOUT
+    // ─────────────────────────────────────────────────────────
     RowLayout {
         id: body
         anchors.fill: parent
@@ -1268,7 +1281,7 @@ Page {
             Layout.fillWidth: !page.splitView
             Layout.preferredWidth: page.splitView ? Math.max(320, Math.min(400, page.width * 0.38)) : -1
             visible: page.splitView || !page.mobileThreadOpen
-            // Icon-only buttons are decided by the pane, not the page: the
+            // Icon-only buttons are decided by the pane, not the page: the split-view inbox is 320-400pt
             // wide even on a large iPad
             readonly property bool compact: width > 0 && width < 390
             radius: page.splitView ? t.rMd : 0
@@ -1690,6 +1703,7 @@ Page {
                         // Swipe left: quick actions revealed on the trailing edge
                         swipe.right: Row {
                             // Positioned from the delegate's own geometry: swipe.* items are parented after
+                            // creation and unparented during teardown, so `parent` is null at both ends
                             x: threadRow.width - width
                             height: threadRow.height
                             visible: threadRow.swipe.position < 0
@@ -1808,7 +1822,8 @@ Page {
                         }
                     }
 
-                    // Empty state lives in the footer so it flows below the connection
+                    // Empty state lives in the footer so it flows below the connection / search header
+                    // (an overlay centred on the view would sit on top of that header)
                     footer: Item {
                         width: threadList.width
                         height: emptyInboxCol.visible ? emptyInboxCol.height + 36 : 0
@@ -2067,6 +2082,7 @@ Page {
                         anchors.leftMargin: 10
                         anchors.rightMargin: 10
                         // Short threads sit at the bottom, next to the composer. Updated imperatively
+                        // because contentHeight is re-estimated whenever the height changes.
                         height: fitHeight
                         property real fitHeight: 0
                         function refit() {

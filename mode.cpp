@@ -15,6 +15,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "mode.h"
+#include "QsoReplayCapture.h"
 #include <iostream>
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -254,6 +255,10 @@ void Mode::begin_connect()
 {
     m_modeinfo.status = CONNECTING;
 
+#if defined(Q_OS_IOS)
+    // No serial AMBE hardware on iOS: a stale vocoder setting must not leave us in CONNECTING forever.
+    m_vocoder.clear();
+#endif
     if((m_vocoder != "") && (m_mode != "M17")){
         m_hwrx = true;
         m_hwtx = true;
@@ -333,6 +338,7 @@ void Mode::start_tx()
     }
     m_modeinfo.streamid = 0;
     m_modeinfo.stream_state = TRANSMITTING;
+    QsoReplayCapture::beginOver(QsoReplayCapture::Kind::Tx);
 #ifdef USE_FLITE
 
     if(m_ttsid == 1){
@@ -358,6 +364,7 @@ void Mode::start_tx()
 void Mode::stop_tx()
 {
     m_tx = false;
+    QsoReplayCapture::endOver(QsoReplayCapture::Kind::Tx);
 }
 
 bool Mode::load_vocoder_plugin()

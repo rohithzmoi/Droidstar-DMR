@@ -82,7 +82,7 @@ void IAX::set_iax_params(QString username, QString password, QString callingname
 	}
 	// If host contains host:port (single colon, non-IPv6), split out port
 	if (m_host.count(':') == 1) {
-		const int colonIdx = m_host.indexOf(':');
+		const int colonIdx = static_cast<int>(m_host.indexOf(':'));
 		const QString portPart = m_host.mid(colonIdx + 1).trimmed();
 		bool ok = false;
 		const int parsedPort = portPart.toInt(&ok);
@@ -304,6 +304,9 @@ void IAX::send_call_auth()
 
 void IAX::send_dtmf(QByteArray dtmf)
 {
+	if(!m_udp){
+		return;	// socket exists only after the host lookup succeeded
+	}
 	QByteArray out;
 	uint16_t scall = htons(m_scallno | 0x8000);
 	uint16_t dcall = htons(m_dcallno);
@@ -332,6 +335,9 @@ void IAX::send_dtmf(QByteArray dtmf)
 
 void IAX::send_radio_key(bool key)
 {
+	if(!m_udp){
+		return;	// socket exists only after the host lookup succeeded
+	}
 	QByteArray out;
 	uint16_t scall = htons(m_scallno | 0x8000);
 	uint16_t dcall = htons(m_dcallno);
@@ -471,6 +477,9 @@ void IAX::send_lag_response(uint32_t ts)
 
 void IAX::send_voice_frame(int16_t *f)
 {
+	if(!m_udp){
+		return;	// socket exists only after the host lookup succeeded
+	}
 	QByteArray out;
 	uint16_t scall = htons(m_scallno | 0x8000);
 	uint16_t dcall = htons(m_dcallno);
@@ -647,7 +656,9 @@ void IAX::connected()
 		connect(m_rxtimer, SIGNAL(timeout()), this, SLOT(process_rx_data()));
 	}
 	if (!m_rxtimer->isActive()) {
-		m_rxtimer->start(19);
+		// 20 ms frames on a 19 ms tick drained the queue 5 % faster than it filled, so the
+		// playout cushion was rebuilt (a 60 ms hole) every few hundred milliseconds.
+		m_rxtimer->start(m_rxtimerint);
 	}
 	if (!m_ping_timer) {
 		m_ping_timer = new QTimer(this);
@@ -818,7 +829,8 @@ void IAX::process_udp()
 				const uint8_t rIseq = static_cast<uint8_t>(buf.data()[9]);
 				send_ack(dstCallNo, peerCallNo, rIseq, rOseq + 1);
 				if (m_modeinfo.status == CONNECTING && !m_callSent) {
-					// AllStar / Asterisk stanzas with `type = user` (no `host = dynamic`) reject REGREQ
+					// AllStar / Asterisk stanzas with `type = user` (no `host = dynamic`) reject
+					// REGREQ while allowing NEW calls. Proceed with calltoken + send_call().
 					m_regAccepted = false;
 					m_regreq = false;
 					send_calltoken_request();
@@ -995,6 +1007,7 @@ void IAX::process_rx_data()
 		m_rxAudioPrimed = true; // 3 frames (60 ms) buffered before the first dequeue
 	}
 	if(m_rxAudioPrimed && m_audioq.size() >= 160){
+		m_rxEmptyTicks = 0;
 		for(int i = 0; i < 160; ++i){
 			pcm[i] = (qreal)m_audioq.dequeue(); // * m_rxgain;
 		}
@@ -1002,7 +1015,12 @@ void IAX::process_rx_data()
 		emit update_output_level(m_audio->level());
 	}
 	else if(m_rxAudioPrimed && m_audioq.isEmpty()){
-		m_rxAudioPrimed = false; // underrun / end of talkspurt: rebuild the 60 ms cushion
+		// A single late packet is absorbed by the sink's own buffer; only an end of talkspurt
+		// (3 consecutive empty ticks) rebuilds the 60 ms cushion.
+		if(++m_rxEmptyTicks >= 3){
+			m_rxAudioPrimed = false;
+			m_rxEmptyTicks = 0;
+		}
 	}
 	else return;
 }
@@ -1015,7 +1033,9 @@ void IAX::toggle_tx(bool tx)
 
 void IAX::start_tx()
 {
-	int16_t pcm[160];
+	if(!m_udp || !m_audio){
+		return;	// PTT before the call is up
+	}
 	send_radio_key(true);
 	m_ttscnt = 0;
 	qDebug() << "start_tx() " << m_ttsid << " " << m_ttstext;

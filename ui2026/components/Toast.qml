@@ -54,12 +54,22 @@ Item {
 
     Timer { id: hideTimer; onTriggered: root.hide() }
 
+    TextMetrics {
+        id: messageMetrics
+        font.pixelSize: t.fsSmall + 1
+        text: root._message
+    }
+
     Rectangle {
         id: box
         anchors.horizontalCenter: parent.horizontalCenter
         y: root._shown ? root.height - height - 16 - root.bottomOffset : root.height + 8
-        width: Math.min(root.width - 32, Math.max(220, contentRow.implicitWidth + 28))
-        height: Math.max(48, contentRow.implicitHeight + 20)
+        // Sized from the unwrapped message so the wrapped row can't feed back into the width
+        width: Math.min(root.width - 32, 560,
+                        Math.max(220, messageMetrics.advanceWidth + 14 + 8 + 10 + 10
+                                      + (actionButton.visible ? actionButton.implicitWidth + 10 : 0) + 8))
+        height: Math.max(48, messageLabel.implicitHeight + 20,
+                         actionButton.visible ? actionButton.implicitHeight + 4 : 0)
         radius: 14
         color: t.surface3
         border.color: t.tint(root._tone, 0.6)
@@ -74,38 +84,44 @@ Item {
 
         MouseArea { anchors.fill: parent; onClicked: root.hide() }
 
-        RowLayout {
-            id: contentRow
-            anchors.fill: parent
+        // Plain anchors: a wrapping label inside a RowLayout re-triggers the layout pass
+        Rectangle {
+            id: toneDot
+            anchors.left: parent.left
             anchors.leftMargin: 14
-            anchors.rightMargin: 8
-            spacing: 10
-
-            Rectangle {
-                Layout.preferredWidth: 8
-                Layout.preferredHeight: 8
-                radius: 4
-                color: root._tone
-            }
-            Label {
-                Layout.fillWidth: true
-                text: root._message
-                color: t.text
-                font.pixelSize: t.fsSmall + 1
-                wrapMode: Text.WordWrap
-                maximumLineCount: 3
-                elide: Text.ElideRight
-            }
-            Button {
-                visible: root._actionText !== ""
-                text: root._actionText
-                flat: true
-                font.bold: true
-                onClicked: {
-                    var fn = root._action
-                    root.hide()
-                    if (fn) fn()
-                }
+            anchors.verticalCenter: parent.verticalCenter
+            width: 8
+            height: 8
+            radius: 4
+            color: root._tone
+        }
+        Label {
+            id: messageLabel
+            anchors.left: toneDot.right
+            anchors.leftMargin: 10
+            anchors.right: actionButton.visible ? actionButton.left : parent.right
+            anchors.rightMargin: actionButton.visible ? 6 : 14
+            anchors.verticalCenter: parent.verticalCenter
+            text: root._message
+            color: t.text
+            font.pixelSize: t.fsSmall + 1
+            wrapMode: Text.WordWrap
+            maximumLineCount: 3
+            elide: Text.ElideRight
+        }
+        Button {
+            id: actionButton
+            anchors.right: parent.right
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root._actionText !== ""
+            text: root._actionText
+            flat: true
+            font.bold: true
+            onClicked: {
+                var fn = root._action
+                root.hide()
+                if (fn) fn()
             }
         }
     }

@@ -100,7 +100,7 @@ void NXDN::process_udp()
 		m_modeinfo.count++;
 	}
 	if(buf.size() == 43){
-		// Voice before the 17-byte poll reply would dereference m_rxtimer/m_audio before they
+		// Voice before the 17-byte poll reply would dereference m_rxtimer/m_audio before they exist.
 		if (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio) {
 			emit update(m_modeinfo);
 			return;
@@ -116,7 +116,11 @@ void NXDN::process_udp()
 				m_modeinfo.streamid = 0;
 			}
 			else{
-				if(!m_rxtimer->isActive()){
+				if(!m_tx && !m_rxtimer->isActive()){
+					m_rxcodecq.clear();
+					if(m_mbevocoder && !m_hwrx){
+						m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+					}
 					m_audio->start_playback();
 					rxJitterReset();
 					m_rxtimer->start(m_rxtimerint);
@@ -127,7 +131,11 @@ void NXDN::process_udp()
 			}
 		}
 		else if(!m_tx && ( (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_IDLE) )){
-			if(!m_rxtimer->isActive()){
+			if(!m_tx && !m_rxtimer->isActive()){
+				m_rxcodecq.clear();
+				if(m_mbevocoder && !m_hwrx){
+					m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+				}
 				m_audio->start_playback();
 				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
@@ -141,6 +149,14 @@ void NXDN::process_udp()
 			m_modeinfo.frame_number++;
 		}
 		m_rxwatchdog = 0;
+
+		// SACCH non-superframe frames are the call header / EOT (FACCH1 in both halves); they carry no
+		// voice. Decoding their payload as AMBE produced 80 ms of random vocoder output at the start
+		// and end of every over. Nothing is queued while we transmit.
+		if(m_tx || (get_lich_fct(buf.data()[10U]) == NXDN_LICH_USC_SACCH_NS)){
+			emit update(m_modeinfo);
+			return;
+		}
 
 		memcpy(ambe, buf.data() + 15, 7);
 		if(m_hwrx){
@@ -249,10 +265,10 @@ void NXDN::send_ping(bool disconnect)
 
 void NXDN::transmit()
 {
-	uint8_t ambe[7];
+	uint8_t ambe[9];	// encode_2450 fills 7 bytes; headroom so a codec write can never touch pcm[]
 	int16_t pcm[160];
 
-	memset(ambe, 0, 7);
+	memset(ambe, 0, sizeof(ambe));
 	if (!m_tx) {
 		send_frame();
 		return;

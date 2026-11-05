@@ -484,7 +484,7 @@ void DMR::schedule_group_link(bool force)
         return;
     }
 
-    // TGIF Network parks directly on the newly keyed Talkgroup and never
+    // TGIF Network parks directly on the newly keyed Talkgroup and never requires a 4000 unlink first
     const bool needUnlink = !m_isTgif && (m_linkedGroupTg != 0U && m_linkedGroupTg != 4000U && m_linkedGroupTg != target);
     if (needUnlink) {
         m_autoLinkState = AUTOLINK_TX_UNLINK_4000;
@@ -528,6 +528,7 @@ void DMR::request_tgif_talkgroup_switch(uint32_t targetTg, bool forceFallback)
                             : QStringLiteral("tgif.network");
 
     // When tuning to TGIF Parrot (9990 or 31000), do not auto-key silence into Parrot;
+    // simply park any active group talkgroup on 4000 via the session API so group traffic stops.
     if (targetTg == 9990U || targetTg == 31000U) {
         if (m_linkedGroupTg != 0U && m_linkedGroupTg != 4000U) {
             if (!m_tgifNam) {
@@ -576,7 +577,7 @@ void DMR::request_tgif_talkgroup_switch(uint32_t targetTg, bool forceFallback)
             return;
         }
 
-        // Fallback to silent in-band DMR link burst if port 5040 is
+        // Fallback to silent in-band DMR link burst if port 5040 is unreachable or session not yet indexed
         if (m_flco == FLCO_GROUP && m_txdstid == targetTg) {
             schedule_group_link(true || forceFallback);
         }
@@ -670,13 +671,13 @@ bool DMR::shouldAcceptRxPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) c
         return (dstid == 4000U || srcid == 4000U);
     }
 
-    // When tuned to a normal TG or Private ID (m_txdstid !=
+    // When tuned to a normal TG or Private ID (m_txdstid != 4000), suppress background 4000 unlink announcements
     if (srcid == 4000U || dstid == 4000U) {
         return false;
     }
 
     if (isPrivate) {
-        // Accept Private Calls addressed to our DMR ID / ESSID, or from/to our target
+        // Accept Private Calls addressed to our DMR ID / ESSID, or from/to our target ID (e.g. Parrot 9990 / TGIF 31000)
         return (dstid == m_dmrid || dstid == m_essid ||
                 srcid == m_txdstid || dstid == m_txdstid ||
                 srcid == 9990U || srcid == 31000U || srcid == 5000U);
@@ -684,13 +685,14 @@ bool DMR::shouldAcceptRxPacket(uint32_t srcid, uint32_t dstid, bool isPrivate) c
 
     // Incoming packet is a Group Call:
     if (m_flco == FLCO_USER_USER) {
-        // In Private Call mode, only accept group packets if they match
+        // In Private Call mode, only accept group packets if they match our target ID (e.g. TGIF Parrot 9990 / 31000)
         return (dstid == m_txdstid || srcid == m_txdstid ||
                 dstid == m_dmrid || dstid == m_essid ||
                 srcid == 9990U || srcid == 31000U);
     }
 
-    // In Group Call mode, accept Group Calls matching the currently selected
+    // In Group Call mode, accept Group Calls matching the currently selected Talkgroup,
+    // or Parrot echo replies addressed to our DMR ID / ESSID, or TGIF 777 Scan traffic
     if (dstid == m_txdstid || dstid == m_dmrid || dstid == m_essid) {
         return true;
     }
@@ -714,7 +716,9 @@ bool DMR::shouldAcceptRxDataPacket(uint32_t srcid, uint32_t dstid, bool isPrivat
         return false;
     }
     if (isPrivate) {
-        // Data calls are asynchronous and must not be filtered by the selected voice TG.
+        // Data calls are asynchronous and must not be filtered by the selected
+        // voice TG. Accept messages/reports addressed to this terminal and
+        // responses from the current private-call target.
         return dstid == m_dmrid || dstid == m_essid ||
                (m_flco == FLCO_USER_USER && (srcid == m_txdstid || dstid == m_txdstid));
     }
@@ -900,7 +904,7 @@ void DMR::update_odtp_subscription(bool force)
         return;
     }
 
-    // In Group Call mode, subscribe to the selected TG (except 0
+    // In Group Call mode, subscribe to the selected TG (except 0, 4000 Unlink, or 9990 Parrot Private)
     const uint32_t desiredGroupTg =
         (m_flco == FLCO_GROUP && m_txdstid > 0U && m_txdstid != 4000U && m_txdstid != 9990U)
             ? m_txdstid
@@ -912,13 +916,13 @@ void DMR::update_odtp_subscription(bool force)
 
     const uint32_t prevTg = m_odtpSubscribedTg;
 
-    // 1. Cancel all previous active subscriptions on the BrandMeister master (0-byte
+    // 1. Cancel all previous active subscriptions on the BrandMeister master (0-byte payload cancels all)
     send_odtp_packet(REWIND_TYPE_CANCELLING, REWIND_FLAG_NONE, nullptr, 0U);
     m_odtpSubscribedTg = 0U;
     m_odtpSubscribedPrivateSelf = false;
     m_linkedGroupTg = 0U;
 
-    // 2. Always subscribe to Private Voice Calls addressed to our own 7-digit DMR ID
+    // 2. Always subscribe to Private Voice Calls addressed to our own 7-digit DMR ID (for Parrot 9990 & direct calls)
     if (m_dmrid > 0U) {
         uint8_t subPriv[8];
         writeLE32(subPriv + 0U, REWIND_SESSION_TYPE_PRIVATE_VOICE);
@@ -1035,6 +1039,7 @@ void DMR::process_odtp_udp(const QByteArray &buf)
     case REWIND_TYPE_CHALLENGE: {
         if (m_password.isEmpty()) {
             emit update_log("DMR (ODTP): login rejected. BrandMeister hotspot password is empty.");
+            emit auth_rejected();
             m_modeinfo.status = DISCONNECTED;
             emit update(m_modeinfo);
             return;
@@ -1042,6 +1047,7 @@ void DMR::process_odtp_udp(const QByteArray &buf)
         ++m_odtpAuthAttempts;
         if (m_odtpAuthAttempts > 4) {
             emit update_log("DMR (ODTP): authentication failed. Check BrandMeister hotspot security password.");
+            emit auth_rejected();
             m_modeinfo.status = DISCONNECTED;
             emit update(m_modeinfo);
             return;
@@ -1364,7 +1370,7 @@ void DMR::process_udp()
 
     if ((buf.size() >= 6) && (::memcmp(buf.data() + 3, "NAK", 3U) == 0)) {
         if (m_modeinfo.status == CONNECTED_RW) {
-            // Master lost session state (e.g. NAT rebind or BM/TGIF master restart)
+            // Master lost session state (e.g. NAT rebind or BM/TGIF master restart); seamlessly re-login
             emit update_log("DMR: session expired (MSTNAK), re-authenticating...");
             m_modeinfo.status = CONNECTING;
             out.clear();
@@ -1379,7 +1385,8 @@ void DMR::process_udp()
             m_udp->writeDatagram(out, m_address, m_modeinfo.port);
             return;
         } else if (m_isTgif && !m_tgifTriedDefaultPass && m_password != QStringLiteral("passw0rd")) {
-            // If user configured a custom TGIF password in Settings, but their TGIF account has
+            // If user configured a custom TGIF password in Settings, but their TGIF account has not enabled
+            // Hotspot Security (so TGIF expects the default "passw0rd"), automatically retry once with "passw0rd".
             m_tgifTriedDefaultPass = true;
             m_password = QStringLiteral("passw0rd");
             m_modeinfo.status = CONNECTING;
@@ -1403,6 +1410,9 @@ void DMR::process_udp()
                 emit update_log("DMR (TGIF): login rejected (NAK). Check your TGIF Hotspot Security password in Settings.");
             } else {
                 emit update_log("DMR: login/config rejected (NAK). Check password and DMR profile fields.");
+            }
+            if (m_modeinfo.status == CONNECTING || m_modeinfo.status == DMR_AUTH) {
+                emit auth_rejected();
             }
             m_modeinfo.status = DISCONNECTED;
         }
@@ -1509,7 +1519,8 @@ void DMR::process_udp()
         (::memcmp(buf.data(), "DMRD", 4U) == 0) &&
         (m_modeinfo.status == CONNECTED_RW))
     {
-        // Ignore incoming RX packets while transmitting (simplex hotspot) so they never
+        // Ignore incoming RX packets while transmitting (simplex hotspot) so they
+        // never corrupt stream_state or streamid while m_rxtimer is stopped.
         if (m_tx) {
             return;
         }
@@ -1712,7 +1723,7 @@ void DMR::process_udp()
                     m_rxcodecq.append(dmr3ambe[j + (9 * i)]);
                 }
             }
-            // Throttle cross-thread UI updates during continuous voice streaming (emit on
+            // Throttle cross-thread UI updates during continuous voice streaming (emit on STREAM_NEW and Audio Sync frames)
             if (m_modeinfo.stream_state == STREAM_NEW || (pktFlags & 0x10U) != 0U) {
                 emit update(m_modeinfo);
             }
@@ -2017,7 +2028,8 @@ void DMR::transmit()
         m_autoLinkState = AUTOLINK_IDLE;
     }
 
-    // When stop_tx() sets m_tx = false, immediately send DT_TERMINATOR_WITH_LC on the
+    // When stop_tx() sets m_tx = false, immediately send DT_TERMINATOR_WITH_LC
+    // on the next tick without blocking on microphone sample availability.
     if (!m_tx) {
         send_frame();
         return;
@@ -2638,7 +2650,8 @@ void DMR::process_rx_data()
         }
     }
     else if((!m_tx) && !m_hwrx && m_modeinfo.sw_vocoder_loaded && rxShouldConceal()){
-        // Late/missing network frame: keep the speaker fed with a vocoder lost-frame
+        // Late/missing network frame: keep the speaker fed with a vocoder lost-frame repeat
+        // instead of starving the sink (which produced digital-zero holes and clicks).
 #ifdef USE_MD380_VOCODER
         memset(pcm, 0, 160 * sizeof(int16_t));
 #else

@@ -56,17 +56,21 @@ public:
     void setMicLevelerEnabled(bool on) { m_micLeveler.store(on, std::memory_order_relaxed); }
     bool isMicLevelerEnabled() const { return m_micLeveler.load(std::memory_order_relaxed); }
 
-    // RX Zero-Latency Light Cleaning & Enhancement (8 kHz post-AGC, post-STT tap): Sub-bass
+    // RX Zero-Latency Light Cleaning & Enhancement (8 kHz post-AGC, post-STT tap):
+    // Sub-bass rumble HPF + soft syllabic noise floor expander + phase-coherent dynamic de-hisser + light vocal clarity EQ.
     void processRxPostAgcFloatInPlace(float *samples8k, size_t count);
 
-    // RX Step 1 (8 kHz, 160 samples): Syllabic RMS AGC + phase-coherent
+    // RX Step 1 (8 kHz, 160 samples):
+    // Syllabic RMS AGC + phase-coherent dynamic vocoder de-hisser + broadcast vocal clarity EQ.
+    // Produces 100% natural, zero-comb-filter 8 kHz PCM for both TranscriptionEngine and playback.
     void processRx8kInPlace(int16_t *pcm8k, size_t count, bool agcEnabled, float outputVolume = 1.0f);
 
     // RX Step 2 (8 kHz -> 16 kHz, 160 -> 320 samples):
     // 16-tap half-band polyphase 2x oversampler with exact chronological tap ordering.
     size_t processRxUpscale8kTo16k(const int16_t *pcm8k, size_t count8k, float *out16k, float outputVolume = 1.0f);
 
-    // TX Pipeline (16 kHz -> 8 kHz, 320 -> 160 samples): 16 kHz mic
+    // TX Pipeline (16 kHz -> 8 kHz, 320 -> 160 samples):
+    // 16 kHz mic noise suppression, broadcast vocal presence EQ, syllabic leveler, and half-band 2:1 decimator.
     void processTx16kFrameTo8k(const float *in16k, int16_t *out8k);
 
     static float softLimitSample(float x, float knee = 27500.0f, float limit = 32760.0f);
@@ -108,7 +112,7 @@ private:
     std::atomic<bool> m_hdUpscale { true };
     std::atomic<bool> m_micLeveler { false };
 
-    // RX interpolation history (127-tap polyphase, 64 input samples) and 16-tap decimator
+    // RX interpolation history (127-tap polyphase, 64 input samples) and 16-tap decimator history
     std::array<float, 64> m_upHist{};
     std::array<float, 16> m_downHist{};
 
@@ -159,7 +163,7 @@ private:
     int m_txHangCounter { 0 };
     uint32_t m_txNoiseSeed { 0x9E3779B9u }; // comfort-floor LCG state
 
-    // TX GTCRN neural ring buffer (100% wet when active so there
+    // TX GTCRN neural ring buffer (100% wet when active so there is zero dry/wet comb filtering)
     static constexpr size_t kGtcrnRingCap = 2048;
     static constexpr size_t kGtcrnRingMask = kGtcrnRingCap - 1;
     std::array<float, kGtcrnRingCap> m_gtcrnRing{};
@@ -169,7 +173,10 @@ private:
     int m_gtcrnSlowFrames { 0 };
     std::atomic<bool> m_gtcrnThrottled { false };
 
-    // Asynchronous neural VAD sidechain: the capture thread hands the latest 20 ms frame to
+    // Asynchronous neural VAD sidechain: the capture thread hands the latest 20 ms frame to a single
+    // pool worker and reads back the most recent confidence (one frame stale). Running the model
+    // inline used to stall the main thread for several inferences per CoreAudio burst, which made the
+    // 20 ms TX timer miss ticks and the far end conceal/repeat frames (audible flutter in neural modes).
     float runTxNeuralConfidenceSync(const float *samples16k, size_t count16k, float rawRms);
     void neuralSidechainWorker();
     void waitForNeuralWorker();

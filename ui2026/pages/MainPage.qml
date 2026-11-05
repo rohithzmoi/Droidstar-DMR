@@ -116,8 +116,29 @@ Page {
         return 0
     }
 
-    // Two columns (controls | live activity) from ~700pt: every landscape phone qualifies,
+    // Two columns (controls | live activity) from ~700pt: every landscape phone qualifies, not just the
+    // Pro Max sizes, so the TX button and sliders never stretch across the whole screen
     readonly property bool wide: scroller.width >= 700
+
+    // QSO Replay. hasRecording() is a plain invokable, so bump a revision whenever the engine's clip
+    // set changes to re-evaluate the Replay buttons (a pruned clip hides its button immediately).
+    readonly property var replayEngine: (app && app.replayEngineRef) ? app.replayEngineRef : null
+    readonly property var replayPlayer: (app && app.replayPlayerRef) ? app.replayPlayerRef : null
+    property int replayRevision: 0
+    Connections {
+        target: page.replayEngine
+        enabled: page.replayEngine !== null
+        function onStorageChanged() { page.replayRevision++ }
+        function onReplayEnabledChanged() { page.replayRevision++ }
+    }
+    function playHeardReplay(entry) {
+        if (!page.replayPlayer || !entry || !entry.latestClipId) return
+        var who = entry.callsign !== "" ? entry.callsign : qsTr("ID %1").arg(entry.dmrID || 0)
+        var tm = String(entry.latestClipTime || "")
+        var when = tm.length >= 16 ? tm.substring(11, 16) : ""
+        var label = (entry.latestClipKind === "tx" ? qsTr("My TX") + " · " : "") + who + (when !== "" ? " · " + when : "")
+        page.replayPlayer.play(entry.latestClipId, label)
+    }
     readonly property int captionLines: (page.wide || scroller.height >= 740 || !connectionSection.expanded) ? 3 : 2
     FontMetrics { id: captionMetrics; font.pixelSize: t.fsBody }
 
@@ -153,14 +174,16 @@ Page {
                 Layout.alignment: Qt.AlignTop
                 spacing: 12
 
+                // ─────────────────────────────────────────────────────────
                 // CONNECTION
+                // ─────────────────────────────────────────────────────────
                 CollapsibleSection {
                     id: connectionSection
                     title: qsTr("Connection")
                     statusText: (appState && appState.connected)
                                 ? (appState.mode + " • " + appState.selectedHost)
                                 : ((appState && appState.connecting) ? qsTr("Connecting…") : "")
-                    // Narrow headers (Slide Over, small phones) drop the mode prefix instead
+                    // Narrow headers (Slide Over, small phones) drop the mode prefix instead of eliding the host
                     statusTextShort: (appState && appState.connected) ? appState.selectedHost : ""
                     statusIcon: (appState && appState.connected && appState.odtpActive) ? "\uf0e7" : ""
                     statusColor: (appState && appState.connected) ? t.success : t.warning
@@ -352,7 +375,9 @@ Page {
                                     placeholderText: (page.mode === "DMR" && appState && appState.privateCall)
                                                      ? qsTr("DMR ID (e.g. 9990)")
                                                      : qsTr("Talkgroup ID")
-                                    inputMethodHints: Qt.ImhDigitsOnly
+                                    // Numbers-and-punctuation pad: unlike the iOS number pad it has a Done key
+                                    inputMethodHints: Qt.ImhPreferNumbers | Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
+                                    EnterKey.type: Qt.EnterKeyDone
                                     validator: RegularExpressionValidator { regularExpression: /[0-9]{0,8}/ }
                                     Accessible.name: qsTr("Talkgroup ID")
 
@@ -546,7 +571,9 @@ Page {
                     }
                 }
 
+                // ─────────────────────────────────────────────────────────
                 // RX.TX CONTROLS
+                // ─────────────────────────────────────────────────────────
                 CollapsibleSection {
                     id: txSection
                     title: qsTr("RX.TX Controls")
@@ -618,7 +645,6 @@ Page {
                                 radius: height / 2
                                 width: Math.max(height, (parent.width - 4) * level)
                                 color: (appState && appState.txActive) ? t.danger : (level > 0.85 ? t.warning : t.success)
-                                Behavior on width { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                             }
                         }
 
@@ -837,7 +863,9 @@ Page {
                             color: t.textMuted
                         }
 
+                        // ─────────────────────────────────────────────────────
                         // EXPANDABLE DRAWER: VOCODER & GAIN (SWTX, SWRX, AGC)
+                        // ─────────────────────────────────────────────────────
                         Rectangle {
                             id: vocoderDrawer
                             property bool expanded: false
@@ -959,7 +987,7 @@ Page {
                                         width: Math.max(0, parent.width - 20)
                             spacing: 8
 
-                                        // Updated after the layout pass: changing columns while the parent lays
+                                        // Updated after the layout pass: changing columns while the parent lays out re-triggers polish
                                         property int cols: 2
                                         function updateCols() {
                                             var c = width >= 500 ? 3 : (width >= 290 ? 2 : 1)
@@ -1260,7 +1288,9 @@ Page {
                             }
                         }
 
+                        // ─────────────────────────────────────────────────────
                         // EXPANDABLE DRAWER: AUDIO QUALITY & LIVE TRANSCRIPTION
+                        // ─────────────────────────────────────────────────────
                         Rectangle {
                             id: audioClarityDrawer
                             property bool expanded: false
@@ -1849,7 +1879,9 @@ Page {
                 spacing: 12
             }
 
+            // ─────────────────────────────────────────────────────────
             // LIVE ACTIVITY (moves to its own column on wide screens)
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 id: liveSection
                 parent: page.wide ? rightCol : leftCol
@@ -1945,7 +1977,9 @@ Page {
                         }
                     }
 
+                    // ─────────────────────────────────────────────────────────
                     // HOME PAGE FAVOURITE TG SCANNER & QUICK-SWITCH BAR
+                    // ─────────────────────────────────────────────────────────
                     Rectangle {
                         id: homeFavScannerCard
                         Layout.fillWidth: true
@@ -2328,7 +2362,9 @@ Page {
                         }
                     }
 
+                    // ─────────────────────────────────────────────────────────
                     // LIVE TRANSCRIPTION (Adaptive 2-3 line turn box + 1-tap toggle)
+                    // ─────────────────────────────────────────────────────────
                     Rectangle {
                         id: captionCard
                         Layout.fillWidth: true
@@ -2415,7 +2451,7 @@ Page {
                                     }
                                 }
 
-                                // Inline speaker badge on wide cards (>= 480px); on compact phones
+                                // Inline speaker badge on wide cards (>= 480px); on compact phones it sits on its own row below
                                 Rectangle {
                                     visible: captionCardCol.wideCard && captionCardCol.showCaptionBody && captionCardCol.speakerText !== ""
                                     radius: 6
@@ -2533,7 +2569,7 @@ Page {
                                 }
                             }
 
-                            // Dedicated speaker pill row on compact phone screens (< 480px) so
+                            // Dedicated speaker pill row on compact phone screens (< 480px) so it never crowds the header
                             Rectangle {
                                 visible: !captionCardCol.wideCard && captionCardCol.showCaptionBody && captionCardCol.speakerText !== ""
                                 radius: 6
@@ -2650,27 +2686,35 @@ Page {
 
                         Repeater {
                             model: 6
-                            delegate: RowLayout {
+                            // Fixed-height rows: data5/data6 change on every voice packet and a layout
+                            // row would re-polish the whole page 50 times a second.
+                            delegate: Item {
                                 required property int index
                                 readonly property string labelText: appState ? appState["label" + (index + 1)] : ""
                                 readonly property string valueText: appState ? appState["data" + (index + 1)] : ""
                                 visible: labelText !== "" || valueText !== ""
                                 Layout.fillWidth: true
                                 Layout.minimumWidth: 0
-                                spacing: 10
+                                implicitHeight: t.fsSmall + 9
                                 Label {
+                                    id: dataKeyLabel
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 78
                                     text: labelText !== "" ? labelText : qsTr("Info %1").arg(index + 1)
                                     color: t.textMuted
                                     font.pixelSize: t.fsCaption
-                                    Layout.preferredWidth: 78
                                     elide: Text.ElideRight
                                 }
                                 Label {
+                                    anchors.left: dataKeyLabel.right
+                                    anchors.leftMargin: 10
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
                                     text: valueText !== "" ? valueText : "-"
                                     font.pixelSize: t.fsSmall + 1
-                                    font.family: (appState && appState.monoFont !== "") ? appState.monoFont : font.family
+                                    font.family: (appState && appState.monoFont !== "") ? appState.monoFont : Qt.application.font.family
                                     color: valueText !== "" ? t.text : t.textMuted
-                                    Layout.fillWidth: true
                                     elide: Text.ElideRight
                                 }
                             }
@@ -2696,6 +2740,14 @@ Page {
                             }
                         }
 
+                        // Inline player: only takes space while a replay is loaded
+                        ReplayPlayerBar {
+                            Layout.fillWidth: true
+                            Layout.topMargin: active ? 4 : 0
+                            Layout.bottomMargin: active ? 4 : 0
+                            player: page.replayPlayer
+                        }
+
                         Repeater {
                             model: appState ? (appState.lastHeardEntries || []) : []
                             delegate: Rectangle {
@@ -2708,6 +2760,14 @@ Page {
                                 readonly property bool onAirNow: !!(appState && appState.data1 !== "" &&
                                                                     parseInt(appState.data2 || "0") === heardId)
                                 readonly property int unread: page.unreadFrom(heardId)
+                                readonly property string clipId: modelData.latestClipId || ""
+                                readonly property bool hasReplay: page.replayRevision >= 0 && clipId !== "" &&
+                                                                  !!page.replayEngine && page.replayEngine.hasRecording(clipId)
+                                readonly property bool replayCurrent: hasReplay && !!page.replayPlayer &&
+                                                                      page.replayPlayer.currentId === clipId
+                                readonly property bool replayPlaying: replayCurrent && page.replayPlayer.playing
+                                // Narrow phones / Slide Over: keep both buttons, shrink them a little
+                                readonly property int actionSize: page.width < 360 ? 34 : 38
 
                                 Layout.fillWidth: true
                                 implicitHeight: 46
@@ -2764,9 +2824,24 @@ Page {
                                     }
 
                                     RoundIconButton {
+                                        visible: heardRow.hasReplay
+                                        implicitWidth: heardRow.actionSize
+                                        implicitHeight: heardRow.actionSize
+                                        glyphSize: 13
+                                        glyph: heardRow.replayPlaying ? "\uf04c" : "\uf04b"
+                                        tone: heardRow.replayCurrent ? t.accentStrong : t.accent
+                                        filled: heardRow.replayCurrent
+                                        badge: (heardRow.modelData.clipCount || 0) > 1 ? heardRow.modelData.clipCount : 0
+                                        accessibleName: heardRow.replayPlaying
+                                                        ? qsTr("Pause replay of %1").arg(heardRow.modelData.callsign || heardRow.heardId)
+                                                        : qsTr("Replay %1").arg(heardRow.modelData.callsign || heardRow.heardId)
+                                        onClicked: page.playHeardReplay(heardRow.modelData)
+                                    }
+
+                                    RoundIconButton {
                                         visible: heardRow.canMessage
-                                        implicitWidth: 38
-                                        implicitHeight: 38
+                                        implicitWidth: heardRow.actionSize
+                                        implicitHeight: heardRow.actionSize
                                         glyphSize: 15
                                         glyph: heardRow.unread > 0 ? "\uf0e0" : "\uf003"
                                         tone: heardRow.unread > 0 ? t.accent : t.textMuted
@@ -2783,7 +2858,9 @@ Page {
             }
         }
 
-        // COMPACT RESPONSIVE HOMEPAGE FOOTER CARD (Made with ♥ VU3LVO + support statement
+        // ─────────────────────────────────────────────────────────
+        // COMPACT RESPONSIVE HOMEPAGE FOOTER CARD (Made with ♥ VU3LVO + support statement + pills)
+        // ─────────────────────────────────────────────────────────
         Rectangle {
             id: homeFooter
             x: contentRow.x
@@ -2797,7 +2874,7 @@ Page {
             border.color: t.stroke
             border.width: 1
 
-            // Decided after the layout pass: flipping it mid-pass changes several layout
+            // Decided after the layout pass: flipping it mid-pass changes several layout properties at once
             property bool sideBySide: false
             function updateArrangement() {
                 var v = width >= 560
@@ -2879,7 +2956,7 @@ Page {
                 }
             }
 
-            // Support buttons: equal split under the text on phones, compact pills
+            // Support buttons: equal split under the text on phones, compact pills on the right when wide
             RowLayout {
                 id: footerButtons
                 anchors.right: parent.right
@@ -2969,395 +3046,13 @@ Page {
         }
     }
 
-    // SEARCHABLE RECENT & FAVOURITE TALKGROUPS SHEET
-    Popup {
+    // Searchable Recent & Favourite talkgroups sheet (shared with SimplePage)
+    RecentTgSheet {
         id: recentTgSheet
-        parent: Overlay.overlay
-        modal: true
-        dim: true
-        focus: true
-        padding: 0
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        property string filterTab: "all" // "all", "fav", "recent"
-        property var filteredModel: []
-
-        readonly property var win: page.Window.window
-        readonly property real ow: parent ? parent.width : 400
-        readonly property real oh: parent ? parent.height : 700
-        readonly property bool wideSheet: ow >= 600
-        readonly property real safeTop: (win && win.safeArea) ? win.safeArea.top : 0
-        readonly property real safeBottom: (win && win.safeArea) ? win.safeArea.bottom : 0
-        readonly property real kb: Qt.inputMethod.visible ? Qt.inputMethod.keyboardRectangle.height : 0
-
-        width: wideSheet ? Math.min(520, ow - 48) : ow
-        readonly property real centeredRoom: oh - safeTop - Math.max(kb, safeBottom) - 48
-        height: Math.max(Math.min(280, centeredRoom), Math.min(wideSheet ? 580 : oh * 0.78,
-                                                     wideSheet ? centeredRoom : oh - kb - safeTop - 24))
-        x: (ow - width) / 2
-        y: wideSheet ? safeTop + 24 + Math.max(0, (centeredRoom - height) / 2) : oh - kb - height
-
-        Overlay.modal: Rectangle { color: "#99000000" }
-        background: Rectangle {
-            color: t.surface
-            radius: 18
-            border.color: t.stroke
-            border.width: recentTgSheet.wideSheet ? 1 : 0
-        }
-
-        function rebuildList() {
-            if (!page.droidstarRef || typeof page.droidstarRef.searchTalkgroups !== "function") {
-                recentTgSheet.filteredModel = []
-                return
-            }
-            var q = recentSearchInput.text.trim()
-            var raw = page.droidstarRef.searchTalkgroups(q, 80)
-            var out = []
-            for (var i = 0; i < raw.length; i++) {
-                var item = raw[i]
-                if (!item) continue
-                if (q === "") {
-                    if (recentTgSheet.filterTab === "fav" && !item.isFavourite) continue
-                    if (recentTgSheet.filterTab === "recent" && !item.isRecent) continue
-                }
-                out.push(item)
-            }
-            recentTgSheet.filteredModel = out
-        }
-
-        function openSheet() {
-            recentSearchInput.text = ""
-            recentTgSheet.filterTab = "all"
-            rebuildList()
-            recentTgSheet.open()
-        }
-
-        function selectTg(tgStr, asPrivate) {
-            var raw = (tgStr === undefined || tgStr === null) ? "" : String(tgStr)
-            var v = raw.replace(/[^0-9]/g, "")
-            if (v === "" || v.length > 8)
-                return
-            recentTgSheet.close()
-            page.loadTalkgroup(v, !!asPrivate)
-        }
-
-        Connections {
-            target: page.appState
-            function onRecentTgidsChanged() { if (recentTgSheet.opened) recentTgSheet.rebuildList() }
-            function onFavouriteTgidsChanged() { if (recentTgSheet.opened) recentTgSheet.rebuildList() }
-        }
-
-        contentItem: Item {
-            Rectangle {
-                anchors.fill: parent
-                anchors.bottomMargin: recentTgSheet.wideSheet ? 0 : -18
-                color: t.surface
-                radius: 18
-                border.color: t.stroke
-                border.width: recentTgSheet.wideSheet ? 1 : 0
-            }
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 16
-                anchors.rightMargin: 16
-                anchors.topMargin: 10
-                anchors.bottomMargin: 12 + (recentTgSheet.wideSheet || recentTgSheet.kb > 0 ? 0 : recentTgSheet.safeBottom)
-                spacing: 10
-
-                // Grab handle on phones
-                Rectangle {
-                    Layout.alignment: Qt.AlignHCenter
-                    visible: !recentTgSheet.wideSheet
-                    width: 40; height: 5; radius: 2.5
-                    color: t.textMuted; opacity: 0.5
-                }
-
-                // Header Row
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 0
-                        // Short title on narrow sheets (Slide Over) instead of eliding mid-word
-                        text: recentTgSheet.width < 360 ? qsTr("Talkgroups") : qsTr("Recent & Favourite Talkgroups")
-                        font.pixelSize: t.fsTitle
-                        font.bold: true
-                        color: t.text
-                        elide: Text.ElideRight
-                    }
-
-                    Button {
-                        visible: page.mode === "DMR"
-                        flat: true
-                        text: qsTr("Scan")
-                        font.pixelSize: t.fsCaption
-                        onClicked: {
-                            recentTgSheet.close()
-                            if (page.app) page.app.navigate("scan")
-                        }
-                    }
-
-                    ToolButton {
-                        text: "\uf00d"
-                        font.family: "FontAwesome"
-                        font.pixelSize: 14
-                        Accessible.name: qsTr("Close")
-                        onClicked: recentTgSheet.close()
-                    }
-                }
-
-                // Search Bar
-                TextField {
-                    id: recentSearchInput
-                    Layout.fillWidth: true
-                    placeholderText: qsTr("Search recent, favourite or directory TGs…")
-                    font.pixelSize: t.fsBody
-                    inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
-                    rightPadding: clearRecentSearch.visible ? 36 : 12
-                    onTextChanged: recentTgSheet.rebuildList()
-                    onAccepted: {
-                        if (recentTgSheet.filteredModel.length > 0) {
-                            recentTgSheet.selectTg(recentTgSheet.filteredModel[0].tgid)
-                        } else if (/^[0-9]{1,8}$/.test(text.trim())) {
-                            recentTgSheet.selectTg(text.trim())
-                        }
-                    }
-
-                    background: Rectangle {
-                        implicitHeight: t.controlHeight
-                        radius: 10
-                        color: t.surface2
-                        border.color: recentSearchInput.activeFocus ? t.accent : t.stroke
-                        border.width: 1
-                    }
-
-                    ToolButton {
-                        id: clearRecentSearch
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: recentSearchInput.text.length > 0
-                        text: "\uf057"
-                        font.family: "FontAwesome"
-                        font.pixelSize: 14
-                        opacity: 0.75
-                        Accessible.name: qsTr("Clear search")
-                        onClicked: recentSearchInput.clear()
-                    }
-                }
-
-                // Filter Tabs (All / Starred Favourites / Recent) + DMR Quick Actions
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 6
-
-                    ChipToggle {
-                        text: qsTr("All")
-                        checked: recentTgSheet.filterTab === "all"
-                        onClicked: { recentTgSheet.filterTab = "all"; recentTgSheet.rebuildList() }
-                    }
-                    ChipToggle {
-                        text: qsTr("Favourites (%1)").arg(page.appState && page.appState.favouriteTgids ? page.appState.favouriteTgids.length : 0)
-                        glyph: "\uf005"
-                        activeColor: t.warning
-                        checked: recentTgSheet.filterTab === "fav"
-                        onClicked: { recentTgSheet.filterTab = "fav"; recentTgSheet.rebuildList() }
-                    }
-                    ChipToggle {
-                        text: qsTr("Recent (%1)").arg(page.appState && page.appState.recentTgids ? page.appState.recentTgids.length : 0)
-                        glyph: "\uf1da"
-                        checked: recentTgSheet.filterTab === "recent"
-                        onClicked: { recentTgSheet.filterTab = "recent"; recentTgSheet.rebuildList() }
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    // Clear Recent History
-                    ToolButton {
-                        visible: !!(page.appState && page.appState.recentTgids && page.appState.recentTgids.length > 0)
-                        text: "\uf1f8"
-                        font.family: "FontAwesome"
-                        font.pixelSize: 13
-                        palette.buttonText: t.danger
-                        Accessible.name: qsTr("Clear recent talkgroups")
-                        onClicked: {
-                            if (page.app) page.app.clearRecentTalkgroups()
-                            recentTgSheet.rebuildList()
-                        }
-                    }
-                }
-
-                // Quick DMR Actions Row (Unlink 4000 & Parrot 9990)
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: page.mode === "DMR" && recentSearchInput.text.trim() === ""
-                    spacing: 8
-
-                    AppButton {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 36
-                        glyph: "\uf127"
-                        text: recentTgSheet.width >= 360 ? qsTr("Unlink (TG 4000)") : qsTr("Unlink 4000")
-                        onClicked: recentTgSheet.selectTg("4000")
-                    }
-
-                    AppButton {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 36
-                        glyph: "\uf130"
-                        text: recentTgSheet.width >= 360 ? qsTr("Parrot (9990)") : qsTr("Parrot")
-                        onClicked: recentTgSheet.selectTg("9990", true)
-                    }
-                }
-
-                // List of Talkgroups with Star/Pin Button on every row
-                ListView {
-                    id: recentTgList
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    model: recentTgSheet.filteredModel
-                    clip: true
-                    spacing: 6
-                    boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: ScrollBar {
-                        policy: recentTgList.contentHeight > recentTgList.height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
-                    }
-
-                    delegate: Rectangle {
-                        id: tgRowItem
-                        required property var modelData
-                        readonly property string rowTgid: String(modelData && modelData.tgid !== undefined ? modelData.tgid : "").replace(/[^0-9]/g, "")
-                        readonly property bool isCurrent: !!(page.appState && String(page.appState.dmrtgid) === rowTgid)
-                        readonly property bool isFav: !!(modelData && modelData.isFavourite)
-                        readonly property bool isLive: !!(modelData && modelData.isLive)
-
-                        width: ListView.view ? ListView.view.width : parent.width
-                        height: 52
-                        radius: 10
-                        color: isCurrent ? t.tint(t.accent, 0.16)
-                             : (isLive ? t.tint(t.success, 0.10)
-                             : (rowSelectMouse.pressed ? t.surface3 : t.surface2))
-                        border.color: isCurrent ? t.accent : (isLive ? t.success : t.stroke)
-                        border.width: 1
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 8
-                            spacing: 8
-
-                            Item {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    spacing: 8
-
-                                    Rectangle {
-                                        radius: 6
-                                        implicitHeight: 24
-                                        implicitWidth: rowTgNum.implicitWidth + 12
-                                        Layout.preferredWidth: implicitWidth
-                                        color: tgRowItem.isLive ? t.tint(t.success, 0.24) : t.surface3
-                                        border.color: tgRowItem.isLive ? t.success : t.stroke
-                                        border.width: 1
-
-                                        Label {
-                                            id: rowTgNum
-                                            anchors.centerIn: parent
-                                            text: "TG " + tgRowItem.rowTgid
-                                            font.pixelSize: t.fsSmall
-                                            font.bold: true
-                                            color: t.text
-                                        }
-                                    }
-
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        Layout.minimumWidth: 0
-                                        spacing: 1
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: 0
-                                            text: (tgRowItem.modelData && tgRowItem.modelData.name) ? tgRowItem.modelData.name
-                                                  : qsTr("Talkgroup %1").arg(tgRowItem.rowTgid)
-                                            font.pixelSize: t.fsBody
-                                            font.bold: tgRowItem.isCurrent || tgRowItem.isFav
-                                            color: tgRowItem.isCurrent ? t.accent : t.text
-                                            elide: Text.ElideRight
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            Layout.minimumWidth: 0
-                                            visible: tgRowItem.isLive
-                                            text: qsTr("ON AIR") + ((tgRowItem.modelData && tgRowItem.modelData.sourceCall) ? (" • " + tgRowItem.modelData.sourceCall) : "")
-                                            font.pixelSize: t.fsCaption - 1
-                                            font.bold: true
-                                            color: t.success
-                                            elide: Text.ElideRight
-                                        }
-                                    }
-                                }
-
-                                MouseArea {
-                                    id: rowSelectMouse
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: recentTgSheet.selectTg(tgRowItem.rowTgid, false)
-                                }
-                            }
-
-                            Rectangle {
-                                implicitWidth: 36
-                                implicitHeight: 36
-                                Layout.preferredWidth: 36
-                                Layout.preferredHeight: 36
-                                radius: 8
-                                color: tgRowItem.isFav ? t.tint(t.warning, 0.20) : t.surface3
-                                border.color: tgRowItem.isFav ? t.tint(t.warning, 0.70) : t.stroke
-                                border.width: 1
-
-                                Label {
-                                    anchors.centerIn: parent
-                                    text: tgRowItem.isFav ? "\uf005" : "\uf006"
-                                    font.family: "FontAwesome"
-                                    font.pixelSize: 14
-                                    color: tgRowItem.isFav ? t.warning : t.textMuted
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        if (page.app && tgRowItem.rowTgid !== "") {
-                                            page.app.toggleFavouriteTalkgroup(tgRowItem.rowTgid)
-                                            recentTgSheet.rebuildList()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Label {
-                        anchors.centerIn: parent
-                        visible: recentTgSheet.filteredModel.length === 0
-                        text: recentSearchInput.text.trim() !== ""
-                              ? qsTr("No matching talkgroups found")
-                              : (recentTgSheet.filterTab === "fav"
-                                 ? qsTr("No favourite talkgroups pinned yet.\nTap the star next to any TG to pin it.")
-                                 : qsTr("No recent talkgroups yet.\nType a TG number or search by country/name above."))
-                        horizontalAlignment: Text.AlignHCenter
-                        font.pixelSize: t.fsSmall
-                        color: t.textMuted
-                    }
-                }
-            }
-        }
+        app: page.app
+        appState: page.appState
+        droidstarRef: page.droidstarRef
+        mode: page.mode
+        onTalkgroupChosen: function(tg, asPrivate) { page.loadTalkgroup(tg, asPrivate) }
     }
 }

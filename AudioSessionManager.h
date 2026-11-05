@@ -39,6 +39,8 @@ bool isAppInBackground(void);
 // Query active iOS AVAudioSession hardware sample rate and route generation counter
 double getActiveAudioSampleRate(void);
 uint32_t getAudioRouteGeneration(void);
+// Bumped only when iOS stops or destroys our audio units (interruption began, media services reset).
+uint32_t getAudioIOInvalidationGeneration(void);
 bool isIOSExternalMicActive(void);
 
 // Apple hardware microphone directional beamforming / voice isolation control
@@ -55,9 +57,15 @@ void updateNowPlayingInfo(void);
 // Re-apply speaker override if needed (call after playback starts)
 void ensureSpeakerRoute(void);
 
-// Remote command callbacks (for PTT from headphones/Control Center)
-typedef void (*PTTCallback)(void);
-void setPTTCallbacks(PTTCallback pressCallback, PTTCallback releaseCallback);
+// Headset / Control Center media button events. kind: 0 = play/pause/toggle press, 1 = stop.
+// The PTT button manager decides what a press means (toggle, hold, ignored).
+typedef void (*DSMediaButtonCallback)(int kind);
+void setMediaButtonCallback(DSMediaButtonCallback callback);
+// Next/previous track commands (car steering wheels, some headsets) also count as a press.
+void setMediaTrackButtonsEnabled(bool enabled);
+
+// True when the Metal device supports GPU family Apple7 (A14+): below that whisper silently runs on CPU.
+bool ios_metal_supports_family7(void);
 
 // Safe-area insets (points) of the key window. Must be called on the main thread.
 bool getSafeAreaInsets(double *top, double *left, double *bottom, double *right);

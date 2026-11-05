@@ -54,7 +54,9 @@ private:
     QString lastSavedFilePath;
     mutable QMutex m_mutex;
     mutable QHash<QString, QJsonArray> m_cache;
-    // Single-threaded pool: async saves run strictly in submission order (an older
+    // Single-threaded pool: async saves run strictly in submission order (an older snapshot can
+    // never overwrite a newer one) and the destructor drains it before the members above go away.
+    // Must stay the last member so it is destroyed first.
     QThreadPool m_ioPool;
 };
 

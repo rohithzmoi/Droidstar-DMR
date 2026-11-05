@@ -38,7 +38,7 @@ void DCS::process_udp()
 	static bool sd_sync = 0;
 	static int sd_seq = 0;
 	static char user_data[21];
-    buf.resize(200);
+    buf.resize(m_udp->pendingDatagramSize());
     const qint64 size = m_udp->readDatagram(buf.data(), buf.size(), &sender, &senderPort);
 
     if(m_debug){
@@ -94,7 +94,11 @@ void DCS::process_udp()
 			m_modeinfo.stream_state = STREAM_NEW;
 			m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
 
-			if(!m_rxtimer->isActive()){
+			if(!m_tx && !m_rxtimer->isActive()){
+				m_rxcodecq.clear();
+				if(m_mbevocoder && !m_hwrx){
+					m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+				}
 				m_audio->start_playback();
 				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
@@ -213,8 +217,11 @@ void DCS::process_udp()
 				}
 			}
 		}
-		for(int i = 0; i < 9; ++i){
-			m_rxcodecq.append(buf.data()[46+i]);
+		// The last D-STAR frame carries the end pattern, not voice; nothing is queued while we transmit.
+		if(!m_tx && !(buf.data()[45] & 0x40)){
+			for(int i = 0; i < 9; ++i){
+				m_rxcodecq.append(buf.data()[46+i]);
+			}
 		}
 	}
 	emit update(m_modeinfo);
@@ -225,8 +232,9 @@ void DCS::hostname_lookup(QHostInfo i)
 	if (!i.addresses().isEmpty()) {
 		QByteArray out;
 		out.resize(519);
-		memcpy(out.data(), m_modeinfo.callsign.toStdString().c_str(), m_modeinfo.callsign.size());
-		memset(out.data() + m_modeinfo.callsign.size(), ' ', 8 - m_modeinfo.callsign.size());
+		const QByteArray cs = m_modeinfo.callsign.toLatin1().left(8);
+		memcpy(out.data(), cs.constData(), cs.size());
+		memset(out.data() + cs.size(), ' ', 8 - cs.size());
 		out[8] = m_module;
 		out[9] = m_module;
 		out[10] = 11;
@@ -252,8 +260,10 @@ void DCS::send_ping()
 {
 	static QByteArray out;
 	out.clear();
-	out.append(m_modeinfo.callsign.toUtf8());
-	out.append(7 - m_modeinfo.callsign.size(), ' ');
+	// Same 8-byte callsign field as the link request (hostname_lookup), so the reflector sees one identity.
+	const QByteArray cs = m_modeinfo.callsign.toLatin1().left(8);
+	out.append(cs);
+	out.append(7 - cs.size(), ' ');
 	out.append(m_module);
 	out.append('\x00');
 	out.append(m_refname.toUtf8());
@@ -275,8 +285,9 @@ void DCS::send_ping()
 void DCS::send_disconnect()
 {
 	QByteArray out;
-	out.append(m_modeinfo.callsign.toUtf8());
-	out.append(8 - m_modeinfo.callsign.size(), ' ');
+	const QByteArray cs = m_modeinfo.callsign.toLatin1().left(8);
+	out.append(cs);
+	out.append(8 - cs.size(), ' ');
 	out.append(m_module);
 	out.append(' ');
 	out.append('\x00');
@@ -427,6 +438,8 @@ void DCS::send_frame(uint8_t *ambe)
 	txdata[45] = (m_txcnt % 21) & 0xff;
 	memcpy(txdata.data() + 46, ambe, 9);
 
+	// Slow-data text is indexed up to [19]; pad once so a short or empty string never over-reads.
+	const QByteArray usrtxt = m_txusrtxt.toLocal8Bit().leftJustified(20, ' ', true);
 	switch(txdata.data()[45]){
 	case 0:
 		txdata[55] = 0x55;
@@ -435,43 +448,43 @@ void DCS::send_frame(uint8_t *ambe)
 		break;
 	case 1:
 		txdata[55] = 0x40 ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[0] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[1] ^ 0x93;
+		txdata[56] = usrtxt[0] ^ 0x4f;
+		txdata[57] = usrtxt[1] ^ 0x93;
 		break;
 	case 2:
-		txdata[55] = m_txusrtxt.toLocal8Bit().data()[2] ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[3] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[4] ^ 0x93;
+		txdata[55] = usrtxt[2] ^ 0x70;
+		txdata[56] = usrtxt[3] ^ 0x4f;
+		txdata[57] = usrtxt[4] ^ 0x93;
 		break;
 	case 3:
 		txdata[55] = 0x41 ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[5] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[6] ^ 0x93;
+		txdata[56] = usrtxt[5] ^ 0x4f;
+		txdata[57] = usrtxt[6] ^ 0x93;
 		break;
 	case 4:
-		txdata[55] = m_txusrtxt.toLocal8Bit().data()[7] ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[8] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[9] ^ 0x93;
+		txdata[55] = usrtxt[7] ^ 0x70;
+		txdata[56] = usrtxt[8] ^ 0x4f;
+		txdata[57] = usrtxt[9] ^ 0x93;
 		break;
 	case 5:
 		txdata[55] = 0x42 ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[10] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[11] ^ 0x93;
+		txdata[56] = usrtxt[10] ^ 0x4f;
+		txdata[57] = usrtxt[11] ^ 0x93;
 		break;
 	case 6:
-		txdata[55] = m_txusrtxt.toLocal8Bit().data()[12] ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[13] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[14] ^ 0x93;
+		txdata[55] = usrtxt[12] ^ 0x70;
+		txdata[56] = usrtxt[13] ^ 0x4f;
+		txdata[57] = usrtxt[14] ^ 0x93;
 		break;
 	case 7:
 		txdata[55] = 0x43 ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[15] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[16] ^ 0x93;
+		txdata[56] = usrtxt[15] ^ 0x4f;
+		txdata[57] = usrtxt[16] ^ 0x93;
 		break;
 	case 8:
-		txdata[55] = m_txusrtxt.toLocal8Bit().data()[17] ^ 0x70;
-		txdata[56] = m_txusrtxt.toLocal8Bit().data()[18] ^ 0x4f;
-		txdata[57] = m_txusrtxt.toLocal8Bit().data()[19] ^ 0x93;
+		txdata[55] = usrtxt[17] ^ 0x70;
+		txdata[56] = usrtxt[18] ^ 0x4f;
+		txdata[57] = usrtxt[19] ^ 0x93;
 		break;
 	default:
 		txdata[55] = 0x16;

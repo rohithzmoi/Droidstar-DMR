@@ -39,13 +39,18 @@
 
 namespace {
 
-// 16-tap maximally-flat Lagrange half-band polyphase FIR coefficients (-77.5 dB THD+N at
+// 16-tap maximally-flat Lagrange half-band polyphase FIR coefficients (-77.5 dB THD+N at 1 kHz)
+// 2 * (kHalfBand0 + kHalfBand1 + kHalfBand2 + kHalfBand3) == 1.0f
 constexpr float kHalfBand0 = -5.0f / 2048.0f;
 constexpr float kHalfBand1 =  49.0f / 2048.0f;
 constexpr float kHalfBand2 = -245.0f / 2048.0f;
 constexpr float kHalfBand3 =  1225.0f / 2048.0f;
 
-// RX upsample lowpass taps (127-tap Kaiser, half stored).
+// RX 8 kHz -> 16 kHz interpolation lowpass: 127-tap Kaiser (fc 3.85 kHz, 300 Hz transition, x2 for the
+// zero-stuffed interpolator). Symmetric: kRxInterp[63] is the centre tap, kRxInterp[i] == kRxInterp[126 - i].
+// Response: 0 dB to 3.7 kHz, -2.6 dB at 3.8 kHz, -42 dB at 4.0 kHz, <= -52 dB above. Unlike a half-band
+// (which is symmetric about 4 kHz and so leaks 3.9 kHz content to 4.1 kHz) this removes the 4-4.5 kHz
+// mirror of full-band codecs (Codec2, IMBE) as well, measured -68 dB or better on every RX codec.
 constexpr float kRxInterp[64] = {
      1.046493600e-03f, -6.820636521e-04f, -1.402675999e-03f,  6.628593042e-04f,
      1.810055254e-03f, -5.728354198e-04f, -2.262417861e-03f,  3.963856184e-04f,
@@ -213,7 +218,7 @@ AudioEnhancer::~AudioEnhancer()
 
 void AudioEnhancer::waitForNeuralWorker()
 {
-    // The worker exits as soon as it sees no pending frame (or
+    // The worker exits as soon as it sees no pending frame (or shutdown); it never blocks for long.
     {
         QMutexLocker lock(&m_neuralJobMutex);
         m_neuralPendingValid = false;
@@ -321,20 +326,25 @@ float AudioEnhancer::softLimitSample(float x, float knee, float limit)
 
 void AudioEnhancer::initFilters()
 {
-    // RX 8 kHz base sub-bass DC/rumble filter (85 Hz Butterworth — preserves male fundamental
+    // RX 8 kHz base sub-bass DC/rumble filter (85 Hz Butterworth — preserves male fundamental voice pitch >= 95 Hz)
     m_rx8kHpf = makeHighpass(8000.0f, 85.0f, 0.70710678f);
 
-    // Sidechain energy detectors for RX Dynamic De-Hisser & Soft Syllabic Expander (never
+    // Sidechain energy detectors for RX Dynamic De-Hisser & Soft Syllabic Expander (never subtracted from signal!)
     m_rxVoiceBandDetector = makeBandpass(8000.0f, 750.0f, 0.70f);
     m_rxHissBandDetector  = makeHighpass(8000.0f, 2600.0f, 0.70710678f);
 
-    // RX Vocal Clarity EQ (100% linear biquads, zero low-pass muffling, zero IMD/comb
+    // RX Vocal Clarity EQ (100% linear biquads, zero low-pass muffling, zero IMD/comb distortion)
     m_rxWarmthEq   = makePeakingEq(8000.0f, 210.0f, 0.80f, 2.2f);   // Vocal chest warmth
     m_rxAntiBoxEq  = makePeakingEq(8000.0f, 520.0f, 1.15f, -3.0f);  // Removes hollow boxy vocoder resonance
     m_rxPresenceEq = makePeakingEq(8000.0f, 2150.0f, 0.85f, 3.6f);  // Crisp consonant & callsign articulation
     m_rxSilkLpf    = makeLowpass(8000.0f, 3450.0f, 0.70710678f);    // Unused in light RX path (kept for ABI compatibility)
 
-    // TX conditioner: 200 Hz HPF, then 8 kHz path.
+    // TX 16 kHz / 8 kHz conditioner:
+    // - 200 Hz LR4 high-pass (two cascaded 2nd-order Butterworth at 16 kHz): removes phone-mic proximity
+    //   bass and hum so AMBE's gain quantiser and bits go to the 300-3400 Hz band that carries speech
+    // - Sidechain voice (700 Hz) vs hiss (>2500 Hz) energy detectors for the noise-floor tracker
+    // - +3.5 dB @ 2.3 kHz articulation contour (HD mode; far-end presence measured 2-3 dB under the
+    //   reference app at +2.5 dB); no low-frequency "warmth" boost
     m_txHpf               = makeHighpass(16000.0f, 200.0f, 0.70710678f);
     m_txHpf2              = makeHighpass(16000.0f, 200.0f, 0.70710678f);
     m_txVoiceBandDetector = makeBandpass(8000.0f, 700.0f, 0.65f);
@@ -412,7 +422,9 @@ void AudioEnhancer::reset()
 
 void AudioEnhancer::upsample8kTo16k(const float *in8k, size_t count8k, float *out16k)
 {
-    // 2x polyphase upsample with kRxInterp (even/odd taps).
+    // 2x polyphase interpolation with the 127-tap kRxInterp lowpass. With the zero-stuffed input
+    // u[2i] = x[i], output y[2i] uses the even taps h[2j] on x[i - j] and y[2i + 1] the odd taps
+    // h[2j + 1] on x[i - j]. m_upHist[0] is x[i] (newest), m_upHist[63] is x[i - 63].
     for (size_t i = 0; i < count8k; ++i) {
         for (size_t k = 63; k > 0; --k) {
             m_upHist[k] = m_upHist[k - 1];
@@ -498,10 +510,11 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
 
     const float vhRatio = m_rxVoiceEnv / (m_rxHissEnv + 25.0f);
 
-    // Noise-like frame: weak voiced-formant dominance. Only such frames may teach the noise
+    // Noise-like frame: weak voiced-formant dominance. Only such frames may teach the noise floor, so a long
+    // continuous over with no pauses can never drag the floor up into the speech level.
     const bool noiseLike = (vhRatio < 1.25f);
 
-    // 2. Adaptive post-AGC noise floor tracker (rolling 600 ms minimum-statistics window of
+    // 2. Adaptive post-AGC noise floor tracker (rolling 600 ms minimum-statistics window of noise-like frames)
     if (noiseLike && frameRms > 25.0f && frameRms < m_agcMinWinRms) {
         m_agcMinWinRms = frameRms;
     }
@@ -521,7 +534,8 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         m_agcNoiseFloor = 0.94f * m_agcNoiseFloor + 0.06f * frameRms;
     }
 
-    // Hard ceiling relative to the tracked speech level: the floor can never exceed 40%
+    // Hard ceiling relative to the tracked speech level: the floor can never exceed 40% of the talker's
+    // running speech RMS, so the expander thresholds always stay well below the voice.
     const float floorCeiling = std::clamp(m_agcSlowRms * 0.40f, 300.0f, 2000.0f);
     m_agcNoiseFloor = std::clamp(m_agcNoiseFloor, 120.0f, floorCeiling);
 
@@ -548,7 +562,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         m_agcSlowRms = std::clamp(m_agcSlowRms, 800.0f, 24000.0f);
     }
 
-    // 4. Syllabic Downward Expander (-13 dB = 0.22x floor between words; still
+    // 4. Syllabic Downward Expander (-13 dB = 0.22x floor between words; still never a hard gate)
     constexpr float kMinExpFloor = 0.22f;
     float targetExp = 1.0f;
     if (!speechActive) {
@@ -557,7 +571,8 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         targetExp = kMinExpFloor + (1.0f - kMinExpFloor) * (ratio * ratio);
     }
 
-    // Attack: frame stats are known up-front, so a detected word onset opens fully within
+    // Attack: frame stats are known up-front, so a detected word onset opens fully within the first 4 ms
+    // (32 samples) of the frame instead of ramping across all 20 ms. Release: ~80 ms to avoid pumping.
     const float startExp = m_rxExpanderGain;
     float endExp;
     size_t attackLen = n;
@@ -572,7 +587,10 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
     m_rxExpanderGain = endExp;
     const float stepExp = (endExp - startExp) / static_cast<float>(attackLen);
 
-    // Soft de-hiss above 2 kHz.
+    // 5. Phase-Coherent Dynamic High-Shelf De-Hisser (> 2.0 kHz)
+    //    Uses exact identity y[n] = alpha * x[n] + (1 - alpha) * lp[n]:
+    //    - During clear speech & sibilant consonants (alpha -> 0.96): 0 dB flat, 100% open top end.
+    //    - During unvoiced vocoder quantization hiss / noisy tails (alpha -> 0.24): smooth -10 dB high-shelf.
     const float snrNorm = std::clamp((frameRms - m_agcNoiseFloor * 1.15f) / std::max(450.0f, m_agcNoiseFloor * 2.4f), 0.0f, 1.0f);
     const float vhNorm  = std::clamp((vhRatio - 0.65f) / 1.65f, 0.0f, 1.0f);
     const float clarityFactor = speechActive ? std::max(vhNorm, snrNorm * 0.85f) : (vhNorm * 0.25f);
@@ -587,7 +605,7 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
     m_rxDeHissAlpha = endAlpha;
     const float stepAlpha = (endAlpha - startAlpha) * invN;
 
-    // 6. Sample-by-sample zero-latency processing: Dynamic De-Hisser + Light Vocal Clarity
+    // 6. Sample-by-sample zero-latency processing: Dynamic De-Hisser + Light Vocal Clarity EQ + Soft Expander
     for (size_t i = 0; i < n; ++i) {
         const float x = work8k[i];
         m_rxDeHissState += 0.36f * (x - m_rxDeHissState);
@@ -604,7 +622,8 @@ void AudioEnhancer::processRxPostAgcFloatInPlace(float *samples8k, size_t count)
         samples8k[i] = y * gExp;
     }
 
-    // 7. Long-over robustness: flush denormals in every recursive state (prevents CPU spikes
+    // 7. Long-over robustness: flush denormals in every recursive state (prevents CPU spikes after long quiet
+    //    tails) and recover instantly if any state ever becomes non-finite (output falls back to clean pass-through).
     auto flush = [](float &v) {
         if (!std::isfinite(v)) { v = 0.0f; return false; }
         if (std::fabs(v) < 1e-12f) { v = 0.0f; }
@@ -644,7 +663,8 @@ void AudioEnhancer::processRx8kInPlace(int16_t *pcm8k, size_t count, bool agcEna
         return;
     }
 
-    // RX is kept 100% true-to-source (no RX noise reduction, no RX EQ filters, no
+    // RX is kept 100% true-to-source (no RX noise reduction, no RX EQ filters, no RX gating)
+    // so operators hear the exact unaltered signal transmitted by others and on Parrot Echo Tests.
     if (!agcEnabled && std::fabs(outputVolume - 1.0f) < 1e-4f) {
         return;
     }
@@ -780,7 +800,8 @@ bool AudioEnhancer::runTxNeuralDenoiser16k(float *samples16k, size_t count16k)
     if (!m_gtcrnPrimed) {
         m_gtcrnWritePos = 0;
         m_gtcrnReadPos = 0;
-        // Pre-warm GTCRN internal STFT window with 256 zero samples and prime ring with 320
+        // Pre-warm GTCRN internal STFT window with 256 zero samples and prime ring with 320 samples
+        // so the 320-vs-256 hop cycle never underflows on any frame.
         std::array<float, 256> zeroWarm{};
         {
             QMutexLocker lock(&st.txCallMutex);
@@ -854,7 +875,8 @@ float AudioEnhancer::measureTxNeuralSpeechConfidence16k(const float *samples16k,
         return -1.0f;
     }
 
-    // Hand the frame to the worker (replacing any frame it has not picked up
+    // Hand the frame to the worker (replacing any frame it has not picked up yet) and return the
+    // most recent result. Never blocks on the model.
     {
         QMutexLocker lock(&m_neuralJobMutex);
         m_neuralPendingFrame.assign(samples16k, samples16k + std::min<size_t>(count16k, 640));
@@ -959,7 +981,7 @@ float AudioEnhancer::runTxNeuralConfidenceSync(const float *samples16k, size_t c
     if (!valid) {
         return -1.0f;
     }
-    // Return neural speech-to-total ratio in [0.0 .. 1.0], scaled to zero when
+    // Return neural speech-to-total ratio in [0.0 .. 1.0], scaled to zero when denoised output is below mic floor
     if (denRms < 95.0f) {
         return 0.0f;
     }
@@ -982,7 +1004,10 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     const bool hdOn = isHdUpscaleEnabled();
     const bool levelerOn = isMicLevelerEnabled();
 
-    // 1. 16 kHz: 4th-order (LR4) 200 Hz high-pass. Phone mics used close to the
+    // 1. 16 kHz: 4th-order (LR4) 200 Hz high-pass. Phone mics used close to the mouth carry 10-20 dB of
+    //    proximity-effect bass at 100-250 Hz; AMBE spends its few bits and its gain quantiser on that
+    //    energy and the result sounds muffled on the far end. Every commercial DMR/analogue chain rolls
+    //    off below ~250 Hz; this matches that (-6 dB at 200 Hz, -24 dB at 100 Hz, -1 dB at 300 Hz).
     std::array<float, 320> hp16k{};
     float raw16kSq = 0.0f;
     for (size_t i = 0; i < 320; ++i) {
@@ -992,7 +1017,8 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     }
     const float raw16kRms = std::sqrt(raw16kSq / 320.0f);
 
-    // 2. 16 kHz -> 8 kHz with the linear-phase 16-tap half-band decimator (flat to
+    // 2. 16 kHz -> 8 kHz with the linear-phase 16-tap half-band decimator (flat to 3.4 kHz, no aliasing).
+    //    The previous 2-sample average was -2 dB at 3.4 kHz and folded 4-8 kHz room noise into the band.
     std::array<float, 160> work8k{};
     downsample16kTo8k(hp16k.data(), 320, work8k.data());
 
@@ -1014,7 +1040,8 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
         hissSq  += hBand * hBand;
 
         if (hdOn) {
-            // Articulation contour only (+3.5 dB @ 2.3 kHz). The former +1.2 dB @ 220
+            // Articulation contour only (+3.5 dB @ 2.3 kHz). The former +1.2 dB @ 220 Hz "warmth" boost
+            // worked against the high-pass and was part of the muffled far-end sound.
             x = m_txPresenceEq.process(x);
         }
 
@@ -1032,7 +1059,7 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     const float vhRatio  = voiceRms / (hissRms + 10.0f);
     const float crest    = peak / (rms + 1.0f);
 
-    // 3. Non-deadlocking Adaptive Noise Floor Tracker (tracks ambient room/fan noise up to
+    // 3. Non-deadlocking Adaptive Noise Floor Tracker (tracks ambient room/fan noise up to 3500 RMS)
     ++m_txFrameCount;
     if (rms < m_txMinWinRms) {
         m_txMinWinRms = rms;
@@ -1056,7 +1083,11 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     }
     m_txNoiseFloor = std::clamp(m_txNoiseFloor, 60.0f, 3200.0f);
 
-    // Neural VAD sidechain (async).
+    // 4. Neural AI (GTCRN sidechain) & Natural VAD Decision
+    //    Opening is decided on broadband level over the tracked floor only. The old voice/hiss ratio test
+    //    (>= 1.25) rejected every fricative (s, sh, f, th are HF-dominant) and, with a 100 ms hang, cut
+    //    words in half. The ratio is still used (weakly) to keep steady broadband fan noise from
+    //    re-opening the gate, and the hang is 300 ms so inter-syllable gaps never close it.
     float neuralConf = -1.0f;
     if (mode == NoiseNeural) {
         neuralConf = measureTxNeuralSpeechConfidence16k(hp16k.data(), 320, raw16kRms);
@@ -1088,7 +1119,9 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
         }
     }
 
-    // Soft expander; closed floor is -12 dB.
+    // 5. Soft downward expander (never a mute). Closed state is -12 dB, not digital silence: the far end
+    //    hears a quiet, continuous room tone instead of hard cuts to AMBE silence frames, and a mis-detected
+    //    syllable is 12 dB down rather than gone. 3 ms attack, ~120 ms release, per-sample smoothed.
     constexpr float kExpanderFloor = 0.25f; // -12 dB
     const bool expanderOn = (mode != NoiseOff || levelerOn);
     const float targetExp = (!expanderOn || voiceActive) ? 1.0f : kExpanderFloor;
@@ -1118,7 +1151,10 @@ void AudioEnhancer::processTx16kFrameTo8k(const float *in16k, int16_t *out8k)
     m_txGain = endGain;
     const float stepGain = (endGain - startGain) / 160.0f;
 
-    // Quiet comfort noise so AMBE does not emit hard silence frames.
+    // 6. Comfort floor: the AMBE encoder emits a silence frame below ~12 RMS (-68 dBFS) and every receiver
+    //    then mutes hard. A -62 dBFS uniform-noise floor (45 dB under speech, inaudible on a phone) keeps
+    //    the encoder producing real frames through pauses, so the far end hears continuous room tone
+    //    instead of cuts to digital silence.
     constexpr float kComfortAmp = 43.0f; // uniform +-43 -> ~25 RMS
 
     for (size_t i = 0; i < 160; ++i) {

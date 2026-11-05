@@ -20,6 +20,7 @@
 #include "dmr.h"
 #include "httpmanager.h"
 #include "TranscriptionEngine.h"
+#include "QsoReplayEngine.h"
 #include <QGuiApplication>
 #include <QTimer>
 #ifdef Q_OS_ANDROID
@@ -41,32 +42,23 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QUrlQuery>
+#include "dmrauthprobe.h"
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrent>
 #include <cstring>
+#include <atomic>
 #include <stdio.h>
 #include <fcntl.h>
 #include <iostream>
 
-static DroidStar *s_droidStarInstance = nullptr;
+static std::atomic<DroidStar *> s_droidStarInstance{nullptr};   // read from the audio thread callback
 
 static void txEnhancerStateChangedCallback() {
-    if (s_droidStarInstance) {
-        QMetaObject::invokeMethod(s_droidStarInstance, "update_settings", Qt::QueuedConnection);
+    if (DroidStar *inst = s_droidStarInstance.load()) {
+        QMetaObject::invokeMethod(inst, "update_settings", Qt::QueuedConnection);
     }
 }
 
-#ifdef Q_OS_IOS
-static void pttPressCallback() {
-    if (s_droidStarInstance) {
-        QMetaObject::invokeMethod(s_droidStarInstance, "press_tx", Qt::QueuedConnection);
-    }
-}
-
-static void pttReleaseCallback() {
-    if (s_droidStarInstance) {
-        QMetaObject::invokeMethod(s_droidStarInstance, "release_tx", Qt::QueuedConnection);
-    }
-}
-#endif
 
 DroidStar::DroidStar(QObject *parent) :
     QObject(parent),
@@ -206,10 +198,8 @@ DroidStar::DroidStar(QObject *parent) :
     
     s_droidStarInstance = this;
     AudioEngine::setStateChangeCallback(txEnhancerStateChangedCallback);
-#ifdef Q_OS_IOS
-    // Register this instance for PTT callbacks from remote commands (headphones, Control
-    setPTTCallbacks(pttPressCallback, pttReleaseCallback);
-#endif
+    // Headset / Bluetooth PTT buttons are routed through PttButtonManager -> QML, so every
+    // hardware source respects the toggle/hold setting and the connected state.
 }
 
 DroidStar::~DroidStar()
@@ -218,12 +208,12 @@ DroidStar::~DroidStar()
     AudioEngine::setStateChangeCallback(nullptr);
     s_droidStarInstance = nullptr;
 #ifdef Q_OS_IOS
-    setPTTCallbacks(nullptr, nullptr);
     setAudioConnectionState(false, "", "");
 #endif
-    // Tear the Mode down on its own thread (stops timers/audio/UDP) before
+    // Tear the Mode down on its own thread (stops timers/audio/UDP) before the thread goes away.
     stop_mode_thread();
-    // Host-file download threads are parented to this object; a QThread deleted
+    // Host-file download threads are parented to this object; a QThread deleted while still
+    // running aborts the process, so wait for them and detach any that refuse to finish.
     const QList<QThread *> workers = findChildren<QThread *>(QString(), Qt::FindDirectChildrenOnly);
     for (QThread *worker : workers) {
         if (worker->isRunning()) {
@@ -374,7 +364,8 @@ void DroidStar::file_downloaded(QString filename)
         process_nxdn_ids();
     }
 
-    // Critical: when host files are downloaded/updated asynchronously, refresh QML
+    // Critical: when host files are downloaded/updated asynchronously, refresh QML bindings.
+    // Legacy UI effectively refreshed hosts on mode change; new UI needs an explicit signal.
     if (hostsChangedForCurrentMode) {
         emit mode_changed();
     }
@@ -418,19 +409,32 @@ void DroidStar::stop_mode_thread()
     if (m_autoTxPunchStopTimer) m_autoTxPunchStopTimer->stop();
     m_autoTxPunchRunning = false;
 
+    bool quitPosted = false;
     if (m_mode) {
         disconnect(m_mode, nullptr, this, nullptr);
         disconnect(this, nullptr, m_mode, nullptr);
-        if (m_modethread && m_modethread->isRunning() && QThread::currentThread() != m_modethread) {
-            QMetaObject::invokeMethod(m_mode, "deleteLater", Qt::BlockingQueuedConnection);
-        } else {
-            m_mode->deleteLater();
-        }
+        Mode *mode = m_mode;
         m_mode = nullptr;
+        if (m_modethread && m_modethread->isRunning() && QThread::currentThread() != m_modethread) {
+            // Cleanup and quit run together inside the mode thread, in that order. Calling quit() from
+            // here instead could end the event loop before the cleanup event is dispatched (Qt drops
+            // queued calls on exit), leaking the audio engine and socket. Not blocking: the audio backend
+            // can stall in stop(), and the GUI thread must never wait on it unbounded.
+            QMetaObject::invokeMethod(mode, [mode]() {
+                // By name so IAX's own deleteLater slot runs; Mode::deleteLater is not virtual.
+                QMetaObject::invokeMethod(mode, "deleteLater", Qt::DirectConnection);
+                QThread::currentThread()->quit();
+            }, Qt::QueuedConnection);
+            quitPosted = true;
+        } else {
+            QMetaObject::invokeMethod(mode, "deleteLater", Qt::DirectConnection);
+        }
     }
     if (m_modethread) {
         if (QThread::currentThread() != m_modethread) {
-            m_modethread->quit();
+            if (!quitPosted) {
+                m_modethread->quit();
+            }
             if (m_modethread->wait(1500)) {
                 delete m_modethread;
             } else {
@@ -465,13 +469,13 @@ void DroidStar::obtain_asl_wt_creds()
     postData.append("user=" + QUrl::toPercentEncoding(m_callsign.toUtf8()));
     postData.append("&pass=" + QUrl::toPercentEncoding(m_asl_password.toUtf8()));
 
-    connect(manager, &QNetworkAccessManager::finished, this, [=, this](QNetworkReply *reply) {
+    connect(manager, &QNetworkAccessManager::finished, this, [this, manager](QNetworkReply *reply) {
         manager->disconnect();
         if (reply->error() == QNetworkReply::NoError) {
             QUrl wtUrl(QString("https://www.allstarlink.org/portal/webtransceiver.php?node=%1").arg(m_refname));
             QNetworkRequest wtReq(wtUrl);
 
-            connect(manager, &QNetworkAccessManager::finished, this, [=, this](QNetworkReply *wtReply) {
+            connect(manager, &QNetworkAccessManager::finished, this, [this, manager](QNetworkReply *wtReply) {
                 bool token_found = false;
                 manager->disconnect();
                 if (wtReply->error() == QNetworkReply::NoError) {
@@ -693,6 +697,8 @@ void DroidStar::process_connect()
 
         stop_mode_thread();
         m_mode = Mode::create_mode(m_protocol);
+        m_dmrAuthFailed = false;
+        m_dmrAuthNet.clear();
         if (!m_mode) {
             m_errortxt = "Unsupported mode: " + m_protocol;
             emit update_log(m_errortxt);
@@ -702,6 +708,7 @@ void DroidStar::process_connect()
         }
         m_modethread = new QThread();
         m_mode->moveToThread(m_modethread);
+    m_activeProtocol = m_protocol;
 
         if(m_protocol == "IAX"){
             QString iaxuser = (sl.size() > 2) ? sl.at(2).simplified() : "";
@@ -766,7 +773,10 @@ void DroidStar::process_connect()
             }
 
             m_mode->set_dmr_params(m_essid, dmrpass, m_latitude, m_longitude, m_location, m_description, m_freq, m_url, m_swid, m_pkgid, m_dmropts);
+            m_dmrAuthNet = isTGIFHost ? QStringLiteral("TGIF") : (isBMHost ? QStringLiteral("BM") : QString());
             if (DMR *dmrMode = qobject_cast<DMR *>(m_mode)) {
+                // Queued from the mode thread ahead of its DISCONNECTED update, so the flag is set in time.
+                connect(dmrMode, &DMR::auth_rejected, this, [this]() { m_dmrAuthFailed = true; }, Qt::QueuedConnection);
                 dmrMode->set_odtp_mode(useOdtp, fallbackHbPort);
                 dmrMode->set_tgif_mode(isTGIFHost);
                 connect(this, &DroidStar::send_dmr_sms,
@@ -941,8 +951,12 @@ void DroidStar::tune_to_talkgroup(const QString &tgid, bool isPrivate)
     save_settings();
     addRecentTGID(QString::number(newTg));
 
-    if (connect_status == Mode::CONNECTED_RW && m_protocol == "DMR") {
-        // Seamless in-session DMR talkgroup switch: - BrandMeister ODTP:
+    if (connect_status == Mode::CONNECTED_RW && m_activeProtocol == "DMR") {
+        // Seamless in-session DMR talkgroup switch:
+        // - BrandMeister ODTP: DMR::dmr_tgid_changed() updates REWIND_TYPE_SUBSCRIPTION in 1 UDP packet
+        // - TGIF Network: DMR::dmr_tgid_changed() switches via TGIF's Session API (:5040/api/sessions/update)
+        //   with fallback to silent in-band auto-link
+        // - Other Homebrew servers: DMR::dmr_tgid_changed() runs silent background auto-link
         m_tuningReconnect = false;
         if (m_tuneReconnectTimer) m_tuneReconnectTimer->stop();
         m_data1.clear();
@@ -964,8 +978,8 @@ void DroidStar::tune_to_talkgroup(const QString &tgid, bool isPrivate)
         return;
     }
 
-    if (connect_status == Mode::CONNECTING && m_protocol == "DMR") {
-        // Already mid-handshake; DMR::setup_connection() will link the updated
+    if (connect_status == Mode::CONNECTING && m_activeProtocol == "DMR") {
+        // Already mid-handshake; DMR::setup_connection() will link the updated m_dmr_destid once connected.
         return;
     }
 
@@ -1138,7 +1152,10 @@ void DroidStar::process_mode_change(const QString &m)
         m_label5 = "";
         m_label6 = "";
     }
+    // IMPORTANT:
     // During startup, process_settings() calls process_mode_change() while other fields
+    // (CALLSIGN/DMRID/DMRHOST/etc) have not yet been loaded into member variables.
+    // Calling save_settings() here would overwrite the existing ini with empty defaults.
     if (m_settings_processed) {
         save_settings();
     }
@@ -1147,7 +1164,7 @@ void DroidStar::process_mode_change(const QString &m)
 
 void DroidStar::save_settings()
 {
-    // Ensure a sane module gets persisted (avoid writing NUL which later
+    // Ensure a sane module gets persisted (avoid writing NUL which later becomes "@String(\\0)")
     if (m_module == 0) m_module = 'A';
 
     //m_settings->setValue("PLAYBACK", ui->comboPlayback->currentText());
@@ -1303,7 +1320,7 @@ void DroidStar::process_settings()
     m_xrf2ref = (m_settings->value("XRF2REF").toString().simplified() == "true") ? true : false;
     m_localhosts = m_settings->value("LOCALHOSTS").toString();
 
-    // Treat empty-but-present values as missing (QSettings defaults apply only to missing
+    // Treat empty-but-present values as missing (QSettings defaults apply only to missing keys).
     if (m_latitude.isEmpty()) m_latitude = "0";
     if (m_longitude.isEmpty()) m_longitude = "0";
     if (m_freq.isEmpty() || m_freq.toUInt() == 0) m_freq = "438800000";
@@ -1333,7 +1350,7 @@ void DroidStar::process_settings()
     m_modemRxInvert = (m_settings->value("ModemRxInvert", "false").toString().simplified() == "true") ? true : false;
     m_modemPTTInvert = (m_settings->value("ModemPTTInvert", "false").toString().simplified() == "true") ? true : false;
 
-    // Load user's saved persisted TX audio config (defaults on first run
+    // Load user's saved persisted TX audio config (defaults on first run: NR=2, HD=true, MicLeveler=false)
     const int savedNr = std::clamp(m_settings->value("AUDIO_NR_MODE", 2).toInt(), 0, 2);
     const bool savedHd = m_settings->value("AUDIO_HD_UPSCALE", true).toBool();
     const bool savedTx = m_settings->value("AUDIO_TX_ENHANCE", false).toBool();
@@ -1365,7 +1382,7 @@ void DroidStar::update_custom_hosts(QString h)
     m_settings->sync();
     m_localhosts = h;
 
-    // Immediately reload the host list for the active mode so custom
+    // Immediately reload the host list for the active mode so custom hosts work without changing modes.
     if (m_protocol == "REF" || m_protocol == "DCS" || m_protocol == "XRF") {
         process_dstar_hosts(m_protocol);
     } else if (m_protocol == "YSF") {
@@ -1737,7 +1754,7 @@ void DroidStar::process_iax_hosts()
 
                 // Also support users entering `IAX <node> <host>:<port> <username> <password>`
                 if (host.count(':') == 1) {
-                    const int colonIdx = host.indexOf(':');
+                    const int colonIdx = static_cast<int>(host.indexOf(':'));
                     bool portInHostOk = false;
                     const int parsedPort = host.mid(colonIdx + 1).toInt(&portInHostOk);
                     bool nextIsPort = false;
@@ -1765,50 +1782,85 @@ void DroidStar::process_iax_hosts()
     }
 }
 
-void DroidStar::process_dmr_ids()
+namespace {
+struct DmrIdTables {
+    QMap<uint32_t, QString> ids;
+    QHash<QString, uint32_t> calls;
+};
+
+DmrIdTables parseDmrIdsFile(const QString &path)
 {
-    QFileInfo check_file(config_path + "/DMRIDs.dat");
-    if(check_file.exists() && check_file.isFile()){
-        QFile f(config_path + "/DMRIDs.dat");
-        if(f.open(QIODevice::ReadOnly)){
-            m_dmrids.clear();
-            m_callsignToDmrId.clear();
-            m_callsignToDmrId.reserve(260000);
-            while(!f.atEnd()){
-                const QByteArray raw = f.readLine();
-                if (raw.isEmpty() || raw.at(0) == '#') {
-                    continue;
-                }
-                const char *p = raw.constData();
-                while (*p == ' ' || *p == '\t') ++p;
-                char *endp = nullptr;
-                const unsigned long id = std::strtoul(p, &endp, 10);
-                if (!id || endp == p) continue;
-                p = endp;
-                while (*p == ' ' || *p == '\t') ++p;
-                const char *csStart = p;
-                while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') ++p;
-                if (p > csStart) {
-                    const uint32_t dmrId = static_cast<uint32_t>(id);
-                    const QString cs = QString::fromLatin1(csStart, static_cast<qsizetype>(p - csStart));
-                    m_dmrids.insert(dmrId, cs);
-                    const QString upperCs = cs.toUpper();
-                    if (!m_callsignToDmrId.contains(upperCs)) {
-                        m_callsignToDmrId.insert(upperCs, dmrId);
-                    }
-                }
+    DmrIdTables t;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return t;
+    }
+    t.calls.reserve(260000);
+    while (!f.atEnd()) {
+        const QByteArray raw = f.readLine();
+        if (raw.isEmpty() || raw.at(0) == '#') {
+            continue;
+        }
+        const char *p = raw.constData();
+        while (*p == ' ' || *p == '\t') ++p;
+        char *endp = nullptr;
+        const unsigned long id = std::strtoul(p, &endp, 10);
+        if (!id || endp == p) continue;
+        p = endp;
+        while (*p == ' ' || *p == '\t') ++p;
+        const char *csStart = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') ++p;
+        if (p > csStart) {
+            const uint32_t dmrId = static_cast<uint32_t>(id);
+            const QString cs = QString::fromLatin1(csStart, static_cast<qsizetype>(p - csStart));
+            t.ids.insert(dmrId, cs);
+            const QString upperCs = cs.toUpper();
+            if (!t.calls.contains(upperCs)) {
+                t.calls.insert(upperCs, dmrId);
             }
-            f.close();
         }
     }
-    else{
+    return t;
+}
+} // namespace
+
+void DroidStar::process_dmr_ids()
+{
+    const QString path = config_path + "/DMRIDs.dat";
+    QFileInfo check_file(path);
+    if(!(check_file.exists() && check_file.isFile())){
         download_file("/DMRIDs.dat");
+        return;
     }
+    if (m_dmrIdsParseRunning) {
+        m_dmrIdsParsePending = true;   // file changed while parsing: run again afterwards
+        return;
+    }
+    m_dmrIdsParseRunning = true;
+    // Parsing 260k lines takes 0.3-0.6 s on an A11: never on the GUI thread.
+    auto *watcher = new QFutureWatcher<DmrIdTables>(this);
+    connect(watcher, &QFutureWatcher<DmrIdTables>::finished, this, [this, watcher]() {
+        DmrIdTables t = watcher->result();
+        watcher->deleteLater();
+        if (!t.ids.isEmpty()) {
+            m_dmrids = std::move(t.ids);
+            m_callsignToDmrId = std::move(t.calls);
+        }
+        m_dmrIdsParseRunning = false;
+        if (m_dmrIdsParsePending) {
+            m_dmrIdsParsePending = false;
+            process_dmr_ids();
+        } else {
+            emit update_data();
+        }
+    });
+    watcher->setFuture(QtConcurrent::run(parseDmrIdsFile, path));
 }
 
 void DroidStar::update_dmr_ids()
 {
     // Non-destructive update: keep existing DMRIDs.dat intact on disk until the new
+    // download completes and is atomically committed by HttpManager.
     download_file("/DMRIDs.dat");
     update_nxdn_ids();
 }
@@ -1842,6 +1894,7 @@ void DroidStar::process_nxdn_ids()
 void DroidStar::update_nxdn_ids()
 {
     // Non-destructive update: keep existing NXDN.csv intact on disk until the new
+    // download completes and is atomically committed by HttpManager.
     download_file("/NXDN.csv");
 }
 
@@ -1960,6 +2013,7 @@ void DroidStar::update_data(Mode::MODEINFO info)
         return;
     }
     // Queued updates from a Mode that was already torn down (tune/reconnect) can still arrive
+    // after stop_mode_thread(); never let a stale object drive the state machine or m_mode.
     if (!m_mode || (sender() && sender() != m_mode)) {
         return;
     }
@@ -1968,11 +2022,14 @@ void DroidStar::update_data(Mode::MODEINFO info)
     if (connect_status == Mode::CONNECTING) {
         qDebug() << "update_data: CONNECTING, mode_status=" << info.status;
     }
-    // If the Mode reports DISCONNECTED while we are trying to connect, treat it as
+    // If the Mode reports DISCONNECTED while we are trying to connect, treat it as a connect failure.
+    // The previous behavior called process_connect(), which toggled into a normal "Disconnected" path
+    // and hid the actual failure from the UI.
     if ((connect_status != Mode::DISCONNECTED) && (info.status == Mode::DISCONNECTED || info.status == Mode::CLOSED || info.status == Mode::TIMEOUT)) {
         const bool wasConnecting = (connect_status == Mode::CONNECTING);
         qDebug() << "Connection ended or failed (Mode status=" << info.status << ")";
         m_errortxt = (info.status == Mode::TIMEOUT) ? "Connection timed out" : (wasConnecting ? "Connection failed" : "Disconnected by server");
+        if (wasConnecting && m_dmrAuthFailed) m_errortxt = "Login rejected. Check your hotspot password.";
         connect_status = Mode::DISCONNECTED;
         m_odtpActive = false;
         m_keepAliveTimer->stop();
@@ -2040,22 +2097,28 @@ void DroidStar::update_data(Mode::MODEINFO info)
     }
 
     m_netstatustxt = "Connected ping cnt: " + QString::number(info.count);
-    m_ambestatustxt = "AMBE: " + (info.ambeprodid.isEmpty() ? "No device" : info.ambeprodid);
-    m_mmdvmstatustxt = "MMDVM: ";
-
-    if(info.mmdvm.isEmpty()){
-        m_mmdvmstatustxt += "No device";
+    // Device status strings only change when the hardware strings change; this runs per packet.
+    if (info.ambeprodid != m_cachedAmbeProdId || info.ambeverstr != m_cachedAmbeVerStr || info.mmdvm != m_cachedMmdvmStr
+        || m_cachedAmbeStatus.isEmpty()) {
+        m_cachedAmbeProdId = info.ambeprodid;
+        m_cachedAmbeVerStr = info.ambeverstr;
+        m_cachedMmdvmStr = info.mmdvm;
+        m_cachedAmbeStatus = "AMBE: " + (info.ambeprodid.isEmpty() ? "No device" : info.ambeprodid);
+        m_cachedMmdvmStatus = "MMDVM: ";
+        if(info.mmdvm.isEmpty()){
+            m_cachedMmdvmStatus += "No device";
+        }
+        QStringList verlist = info.ambeverstr.split('.');
+        if(verlist.size() > 7){
+            m_cachedAmbeStatus += " " + verlist.at(0) + " " + verlist.at(5) + " " + verlist.at(6);
+        }
+        verlist = info.mmdvm.split(' ');
+        if(verlist.size() > 3){
+            m_cachedMmdvmStatus += verlist.at(0) + " " + verlist.at(1);
+        }
     }
-
-    QStringList verlist = info.ambeverstr.split('.');
-    if(verlist.size() > 7){
-        m_ambestatustxt += " " + verlist.at(0) + " " + verlist.at(5) + " " + verlist.at(6);
-    }
-
-    verlist = info.mmdvm.split(' ');
-    if(verlist.size() > 3){
-        m_mmdvmstatustxt += verlist.at(0) + " " + verlist.at(1);
-    }
+    m_ambestatustxt = m_cachedAmbeStatus;
+    m_mmdvmstatustxt = m_cachedMmdvmStatus;
 
     if(info.stream_state == Mode::STREAM_IDLE ||
        info.stream_state == Mode::TRANSMITTING ||
@@ -2105,7 +2168,8 @@ void DroidStar::update_data(Mode::MODEINFO info)
     }
     else if(m_protocol == "DMR"){
         if (info.srcid == 0U && info.dstid > 0U && m_odtpActive) {
-            // If joining an ongoing ODTP call mid-stream before the next SuperHeader/LC
+            // If joining an ongoing ODTP call mid-stream before the next SuperHeader/LC arrives,
+            // resolve the active speaker immediately from live BrandMeister Hoseline state if available.
             const qint64 nowSec = QDateTime::currentSecsSinceEpoch();
             auto hlIt = m_hoselineCalls.constFind(static_cast<int>(info.dstid));
             if (hlIt != m_hoselineCalls.constEnd() && hlIt->stopSec == 0 && (nowSec - hlIt->startSec) < 210 && hlIt->sourceId > 0U) {
@@ -2172,7 +2236,10 @@ void DroidStar::update_data(Mode::MODEINFO info)
     else if(m_protocol == "IAX"){
 
     }
-    QString t = QDateTime::fromMSecsSinceEpoch(info.ts).toString("yyyy.MM.dd hh:mm:ss.zzz");
+    QString t;
+    if (info.stream_state == Mode::STREAM_NEW || info.stream_state == Mode::STREAM_END || info.stream_state == Mode::STREAM_LOST) {
+        t = QDateTime::fromMSecsSinceEpoch(info.ts).toString("yyyy.MM.dd hh:mm:ss.zzz");   // local-time conversion is costly; only for log lines
+    }
     if((m_protocol == "DMR") || (m_protocol == "P25") || (m_protocol == "NXDN")){
         if(info.stream_state == Mode::STREAM_NEW){
             emit update_log(t + " " + m_protocol + " RX started id: " + " srcid: " + QString::number(info.srcid) + " dstid: " + QString::number(info.dstid));
@@ -2201,6 +2268,15 @@ void DroidStar::update_data(Mode::MODEINFO info)
                                    : m_data1.trimmed();
     if (TranscriptionEngine *te = TranscriptionEngine::instance()) {
         te->onStreamStateChanged(info.streamid, info.srcid, resolvedRxCall, info.stream_state);
+    }
+    if (QsoReplayEngine *replay = QsoReplayEngine::instance()) {
+        replay->onConnectionContext(m_protocol, m_refname);
+        if (info.stream_state == Mode::STREAM_NEW) {
+            const QString replayTg = !m_data3.isEmpty() ? m_data3.trimmed()
+                                     : (m_dmr_destid ? QString::number(m_dmr_destid) : QString());
+            replay->onStreamStateChanged(m_protocol, info.streamid, info.srcid, resolvedRxCall, replayTg,
+                                         QsoReplayEngine::StreamEvent::New);
+        }
     }
 
 #ifdef Q_OS_IOS
@@ -2253,10 +2329,10 @@ uint32_t DroidStar::lookupDmrIdForCallsign(const QString &callsign) const
     QString wanted = callsign.trimmed().toUpper();
     if (wanted.isEmpty())
         return 0U;
-    const int dash = wanted.indexOf(QStringLiteral(" - "));
+    const int dash = static_cast<int>(wanted.indexOf(QStringLiteral(" - ")));
     if (dash > 0)
         wanted.truncate(dash);
-    const int space = wanted.indexOf(QLatin1Char(' '));
+    const int space = static_cast<int>(wanted.indexOf(QLatin1Char(' ')));
     if (space > 0)
         wanted.truncate(space);
     auto fastIt = m_callsignToDmrId.constFind(wanted);
@@ -2264,7 +2340,7 @@ uint32_t DroidStar::lookupDmrIdForCallsign(const QString &callsign) const
         return fastIt.value();
     for (auto it = m_dmrids.constBegin(); it != m_dmrids.constEnd(); ++it) {
         QString candidate = it.value().trimmed().toUpper();
-        const int cSpace = candidate.indexOf(QLatin1Char(' '));
+        const int cSpace = static_cast<int>(candidate.indexOf(QLatin1Char(' ')));
         if (cSpace > 0)
             candidate.truncate(cSpace);
         if (candidate == wanted)
@@ -2368,6 +2444,9 @@ void DroidStar::set_output_volume(qreal v)
 
 void DroidStar::press_tx()
 {
+    if (connect_status != Mode::CONNECTED_RW || !m_mode) {
+        return;   // PTT before the link is up must never reach a half-built Mode
+    }
     if (m_autoTxPunchStartTimer) m_autoTxPunchStartTimer->stop();
     if (m_autoTxPunchStopTimer) m_autoTxPunchStopTimer->stop();
     if (m_autoTxPunchRunning) {
@@ -2383,6 +2462,9 @@ void DroidStar::press_tx()
                                       m_refname.toUtf8().constData(),
                                       tg.toUtf8().constData());
 #endif
+    if (QsoReplayEngine *replay = QsoReplayEngine::instance()) {
+        replay->onTxStarted(m_protocol, m_callsign, m_dmr_destid ? QString::number(m_dmr_destid) : m_data3);
+    }
     emit tx_pressed();
 }
 
@@ -2404,6 +2486,9 @@ void DroidStar::release_tx()
 
 void DroidStar::click_tx(bool tx)
 {
+    if (tx && (connect_status != Mode::CONNECTED_RW || !m_mode)) {
+        return;
+    }
 #ifdef Q_OS_IOS
     setAudioTXState(tx);
     if (connect_status == Mode::CONNECTED_RW) {
@@ -2423,6 +2508,11 @@ void DroidStar::click_tx(bool tx)
         }
     }
 #endif
+    if (tx) {
+        if (QsoReplayEngine *replay = QsoReplayEngine::instance()) {
+            replay->onTxStarted(m_protocol, m_callsign, m_dmr_destid ? QString::number(m_dmr_destid) : m_data3);
+        }
+    }
     emit tx_clicked(tx);
 }
 
@@ -2748,7 +2838,7 @@ void DroidStar::parseTgifTalkgroupsCsv(const QByteArray &raw)
         if (line.isEmpty() || line.startsWith(QStringLiteral("TG Number"), Qt::CaseInsensitive)) {
             continue;
         }
-        const int commaIdx = line.indexOf(QLatin1Char(','));
+        const int commaIdx = static_cast<int>(line.indexOf(QLatin1Char(',')));
         if (commaIdx <= 0) {
             continue;
         }
@@ -2787,7 +2877,7 @@ void DroidStar::fetchTgifTalkgroups()
             return;
         }
         const QByteArray raw = reply->readAll();
-        const int prevCount = m_tgifTgNames.size();
+        const int prevCount = static_cast<int>(m_tgifTgNames.size());
         parseTgifTalkgroupsCsv(raw);
         if (m_tgifTgNames.size() > prevCount && m_tgifTgNames.size() > 50) {
             QDir().mkpath(config_path);
@@ -2954,7 +3044,7 @@ QVariantList DroidStar::searchTalkgroups(const QString& query, int limit) const
         }
     }
 
-    // 3. If user typed a search query, match active network directory
+    // 3. If user typed a search query, match active network directory first, then secondary directory
     if (!q.isEmpty()) {
         const int exactId = q.toInt();
         if (exactId > 0 && !added.contains(exactId)) {
@@ -3048,7 +3138,8 @@ void DroidStar::stopHoselineSession()
 
 int DroidStar::hoselineRetryDelayMs(int baseMs)
 {
-    // Exponential backoff (base, 2x, 4x ... capped at 60 s) so an offline device
+    // Exponential backoff (base, 2x, 4x ... capped at 60 s) so an offline device or a
+    // BrandMeister outage does not turn into a 2-3 s HTTPS retry storm that heats the phone.
     const int shift = std::min(m_hoselineFailCount, 5);
     ++m_hoselineFailCount;
     return std::min(60000, baseMs << shift);
@@ -3276,7 +3367,7 @@ void DroidStar::handleHoselineMqttPayload(const QString &topic, const QString &p
     const qint64 stopSec = static_cast<qint64>(n.value(QStringLiteral("Stop")).toDouble());
     const qint64 nowSec = QDateTime::currentSecsSinceEpoch();
 
-    // Match BrandMeister Hoseline filtering: Group Voice Call (SessionType == 7), TG
+    // Match BrandMeister Hoseline filtering: Group Voice Call (SessionType == 7), TG > 90 && TG != 4000
     if (sessionType != 7 || dstId <= 90 || dstId > 999999 || dstId == 4000) {
         return;
     }
@@ -3295,7 +3386,7 @@ void DroidStar::handleHoselineMqttPayload(const QString &topic, const QString &p
     const QString sessionId = n.value(QStringLiteral("SessionID")).toString();
     auto existingIt = m_hoselineCalls.find(dstId);
     if (existingIt != m_hoselineCalls.end()) {
-        // Don't overwrite a currently active session on this TG with an
+        // Don't overwrite a currently active session on this TG with an older stop event from a previous sessionId
         if (existingIt->stopSec == 0 && stopSec > 0 && existingIt->sessionId != sessionId &&
             (nowSec - existingIt->startSec) < 120) {
             return;
@@ -3333,7 +3424,8 @@ void DroidStar::onHoselineUiTick()
     if (!m_hoselineActive) {
         return;
     }
-    // While the app is backgrounded (iOS keeps us alive for audio) nobody can see
+    // While the app is backgrounded (iOS keeps us alive for audio) nobody can see the list;
+    // drop the 800 ms full-table rebuild to ~4 s so the scanner still hops but the CPU stays cool.
     const Qt::ApplicationState appStateNow = QGuiApplication::applicationState();
     if (appStateNow == Qt::ApplicationSuspended || appStateNow == Qt::ApplicationHidden) {
         if (++m_hoselineBgTicks < 5) {
@@ -3362,7 +3454,10 @@ void DroidStar::onHoselineUiTick()
         }
     }
 
-    if (m_hoselineDirty || removedAny || hasLive) {
+    // Live calls only need a periodic duration refresh; rebuilding the QML lists every 800 ms
+    // (Repeater delegates destroyed mid-tap) was the main source of Home/Scan stutter.
+    const bool durationTick = hasLive && (++m_hoselineLiveTicks % 4 == 0);
+    if (m_hoselineDirty || removedAny || durationTick) {
         m_hoselineDirty = false;
         emit hoselineUpdated();
     }
@@ -3544,6 +3639,9 @@ void DroidStar::on_network_state_changed(QNetworkInformation::Reachability reach
 // Function to handle entering the background
 void DroidStar::handle_background_state() {
     qDebug() << "App has entered background.";
+    if (QsoReplayEngine *replay = QsoReplayEngine::instance()) {
+        replay->onEnteredBackground();
+    }
     if (connect_status == Mode::CONNECTED_RW) {
         m_keepAliveTimer->stop();
 #ifdef Q_OS_IOS
@@ -3674,4 +3772,53 @@ QVariantMap DroidStar::get_safe_area()
     m["bottom"] = bottom;
     m["right"] = right;
     return m;
+}
+
+// Settings "Verify": log in to a BrandMeister/TGIF Homebrew master with the saved password, then
+// log straight out (dmrauthprobe.h). GUI thread, async sockets, no worker threads.
+// A spare ESSID (suffix 99, or 98 if the user's own ESSID is 99) keeps the live session untouched.
+void DroidStar::verify_dmr_auth(const QString &network)
+{
+    const bool tgif = network.compare(QLatin1String("TGIF"), Qt::CaseInsensitive) == 0;
+    const QString net = tgif ? QStringLiteral("TGIF") : QStringLiteral("BM");
+    if (QPointer<QUdpSocket> old = m_authProbes.take(net)) old->deleteLater();
+
+    const QString pass = tgif ? m_tgif_password : m_bm_password;
+    if (m_dmrid == 0 || pass.isEmpty()) {
+        emit dmr_auth_result(net, QStringLiteral("missing"));
+        return;
+    }
+    // shortcut: 8-digit IDs probe with the plain ID, which can bump a live session on the same network.
+    const uint32_t probeId = (m_dmrid <= 9999999U) ? m_dmrid * 100U + (m_essid == 100 ? 98U : 99U) : m_dmrid;
+
+    // Prefer the user's chosen server, else the first matching DMRHosts.txt entry.
+    QString host = tgif ? QStringLiteral("tgif.network") : QStringLiteral("2001.master.brandmeister.network");
+    quint16 port = 62031;
+    QFile f(config_path + "/DMRHosts.txt");
+    if (f.open(QIODevice::ReadOnly)) {
+        bool picked = false;
+        while (!f.atEnd()) {
+            const QStringList ll = QString::fromUtf8(f.readLine()).simplified().split(' ');
+            if (ll.size() < 5 || ll.at(0).startsWith('#')) continue;
+            const QString &name = ll.at(0);
+            const bool isTgif = name.startsWith("TGIF", Qt::CaseInsensitive) || ll.at(2).contains("tgif", Qt::CaseInsensitive);
+            const bool isBm = !isTgif && name.startsWith("BM", Qt::CaseInsensitive) && ll.at(2).contains("brandmeister", Qt::CaseInsensitive);
+            if (!(tgif ? isTgif : isBm)) continue;
+            const bool saved = (name == m_saved_dmrhost);
+            if (picked && !saved) continue;
+            host = ll.at(2);
+            const int p = ll.at(4).toInt();
+            port = (p > 0 && p < 65536 && p != 54006) ? quint16(p) : quint16(62031);
+            picked = true;
+            if (saved) break;
+        }
+    }
+
+    QUdpSocket *sock = startDmrAuthProbe(this, host, port, probeId, pass, tgif,
+        [this, net](QUdpSocket *s, const QString &r) {
+            if (m_authProbes.value(net) != s) return;  // superseded by a newer check
+            m_authProbes.remove(net);
+            emit dmr_auth_result(net, r);
+        });
+    m_authProbes.insert(net, sock);
 }

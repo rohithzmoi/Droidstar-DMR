@@ -172,13 +172,16 @@ Item {
                                              + 28 + (wideLayout || kb > 0 ? 0 : safeBottom)
 
         width: wideLayout ? Math.min(520, ow - 48) : ow
-        height: Math.max(200, Math.min(wantedHeight, wideLayout ? 560 : oh * 0.72, oh - kb - safeTop - 24))
+        // Centered sheets keep clear of both the keyboard and the home indicator
+        readonly property real centeredRoom: oh - safeTop - Math.max(kb, safeBottom) - 48
+        height: Math.max(200, Math.min(wantedHeight, wideLayout ? 560 : oh * 0.72,
+                                       wideLayout ? centeredRoom : oh - kb - safeTop - 24))
 
         Overlay.modal: Rectangle {
             color: "#99000000"
         }
         x: (ow - width) / 2
-        y: wideLayout ? Math.max(safeTop + 24, (oh - kb - height) / 2) : oh - kb - height
+        y: wideLayout ? safeTop + 24 + Math.max(0, (centeredRoom - height) / 2) : oh - kb - height
 
         background: Item {}
 

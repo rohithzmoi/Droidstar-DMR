@@ -41,6 +41,7 @@ signals:
     void sms_received(uint32_t srcId, uint32_t dstId, const QString &text, bool isGroup, const QString &format);
     void sms_send_status(int msgId, int status, const QString &detail);
     void sms_ack_received(uint32_t srcId, bool success);
+    void auth_rejected();  // master refused login/password (not config)
 private slots:
     void process_udp();
     void process_rx_data();

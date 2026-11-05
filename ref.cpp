@@ -155,6 +155,9 @@ void REF::process_udp()
 			m_modeinfo.gw2 = rptr2;
 
 			if(!m_tx && !m_rxtimer->isActive() && (m_modeinfo.streamid == 0)){
+				if(m_mbevocoder && !m_hwrx){
+					m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+				}
 				m_audio->start_playback();
 				m_rxtimer->start(m_rxtimerint);
 				m_rxcodecq.clear();
@@ -194,7 +197,9 @@ void REF::process_udp()
 	}
 	if((buf.size() == 0x1d) && (!memcmp(buf.data()+1, header, 5)) ){ //29
 		const uint16_t streamid = (buf.data()[14] << 8) | (buf.data()[15] & 0xff);
-		if(streamid != m_modeinfo.streamid){
+		// Voice is only accepted for the stream a header started (m_rxtimer running);
+		// otherwise idle streamid 0 would match stray frames and the RX queue would grow unbounded.
+		if(streamid != m_modeinfo.streamid || !m_rxtimer || !m_rxtimer->isActive()){
 			return;
 		}
 		m_rxwatchdog = 0;
@@ -339,8 +344,10 @@ void REF::process_udp()
            sd_txt_seq = 0;
 		   m_modeinfo.usertxt = QString(user_data);
 		}
-		for(int i = 0; i < 9; ++i){
-			m_rxcodecq.append(buf.data()[17+i]);
+		if(!m_tx){
+			for(int i = 0; i < 9; ++i){
+				m_rxcodecq.append(buf.data()[17+i]);
+			}
 		}
 		emit update(m_modeinfo);
 	}
@@ -628,6 +635,7 @@ void REF::send_frame(uint8_t *ambe)
 
 	m_modeinfo.frame_number = m_txcnt;
 
+	const QByteArray usrtxt = m_txusrtxt.toLocal8Bit().leftJustified(20, ' ', true);
 	switch(txdata.data()[16]){
 	case 0:
 		txdata[26] = 0x55;
@@ -636,43 +644,43 @@ void REF::send_frame(uint8_t *ambe)
 		break;
 	case 1:
 		txdata[26] = 0x40 ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[0] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[1] ^ 0x93;
+		txdata[27] = usrtxt[0] ^ 0x4f;
+		txdata[28] = usrtxt[1] ^ 0x93;
 		break;
 	case 2:
-		txdata[26] = m_txusrtxt.toLocal8Bit().data()[2] ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[3] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[4] ^ 0x93;
+		txdata[26] = usrtxt[2] ^ 0x70;
+		txdata[27] = usrtxt[3] ^ 0x4f;
+		txdata[28] = usrtxt[4] ^ 0x93;
 		break;
 	case 3:
 		txdata[26] = 0x41 ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[5] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[6] ^ 0x93;
+		txdata[27] = usrtxt[5] ^ 0x4f;
+		txdata[28] = usrtxt[6] ^ 0x93;
 		break;
 	case 4:
-		txdata[26] = m_txusrtxt.toLocal8Bit().data()[7] ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[8] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[9] ^ 0x93;
+		txdata[26] = usrtxt[7] ^ 0x70;
+		txdata[27] = usrtxt[8] ^ 0x4f;
+		txdata[28] = usrtxt[9] ^ 0x93;
 		break;
 	case 5:
 		txdata[26] = 0x42 ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[10] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[11] ^ 0x93;
+		txdata[27] = usrtxt[10] ^ 0x4f;
+		txdata[28] = usrtxt[11] ^ 0x93;
 		break;
 	case 6:
-		txdata[26] = m_txusrtxt.toLocal8Bit().data()[12] ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[13] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[14] ^ 0x93;
+		txdata[26] = usrtxt[12] ^ 0x70;
+		txdata[27] = usrtxt[13] ^ 0x4f;
+		txdata[28] = usrtxt[14] ^ 0x93;
 		break;
 	case 7:
 		txdata[26] = 0x43 ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[15] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[16] ^ 0x93;
+		txdata[27] = usrtxt[15] ^ 0x4f;
+		txdata[28] = usrtxt[16] ^ 0x93;
 		break;
 	case 8:
-		txdata[26] = m_txusrtxt.toLocal8Bit().data()[17] ^ 0x70;
-		txdata[27] = m_txusrtxt.toLocal8Bit().data()[18] ^ 0x4f;
-		txdata[28] = m_txusrtxt.toLocal8Bit().data()[19] ^ 0x93;
+		txdata[26] = usrtxt[17] ^ 0x70;
+		txdata[27] = usrtxt[18] ^ 0x4f;
+		txdata[28] = usrtxt[19] ^ 0x93;
 		break;
 	default:
 		txdata[26] = 0x16;

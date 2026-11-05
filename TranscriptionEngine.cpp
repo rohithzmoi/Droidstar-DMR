@@ -44,6 +44,7 @@
 #endif
 
 #include <QStandardPaths>
+#include <QThread>
 #include <QDir>
 #include <QFileInfo>
 #include <QDateTime>
@@ -590,9 +591,11 @@ DeviceHardwareProfile queryDeviceHardwareProfile()
     } else if (prof.iphoneMajor == 13 && (prof.iphoneMinor == 1 || prof.iphoneMinor == 2)) {
         // iPhone 12 mini / iPhone 12 (4 GB RAM, A14)
         prof.is4GbMidTier = true;
-    } else     if (prof.iphoneMajor == 0 && prof.ramBytes > 0 && prof.ramBytes < 3600000000ULL) {
+    } else if (prof.ramBytes > 0 && prof.ramBytes < 3600000000ULL) {
         prof.isLegacyOrA13 = true;
-    } else if (prof.iphoneMajor == 0 && prof.ramBytes > 0 && prof.ramBytes < 4300000000ULL) {
+    } else if (prof.ramBytes > 0 && prof.ramBytes < 4300000000ULL) {
+        // Any 4 GB device, including iPhone 13 / 13 mini / SE 3 and 4 GB iPads: Turbo and Parakeet
+        // exceed the per-process memory limit there.
         prof.is4GbMidTier = true;
     }
 
@@ -1028,6 +1031,11 @@ void TranscriptionEngine::activateSelectedEngine()
 
 void TranscriptionEngine::refreshIdleStatusText()
 {
+    // m_downloadJobs is owned by the GUI thread; the worker calls this after every over.
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this]() { refreshIdleStatusText(); }, Qt::QueuedConnection);
+        return;
+    }
     const QString selKey = selectedModelKey();
     if (!selKey.isEmpty() && m_downloadJobs.contains(selKey)) {
         const ModelDownloadJob *job = m_downloadJobs.value(selKey);
@@ -2017,8 +2025,9 @@ bool TranscriptionEngine::whisperGpuAllowed() const
     // The Simulator's Metal device cannot run the ggml kernels
     return false;
 #elif defined(Q_OS_IOS)
-    // iOS rejects GPU command buffers from backgrounded apps
-    return !isAppInBackground();
+    // iOS rejects GPU command buffers from backgrounded apps, and ggml falls back to CPU on GPUs
+    // below family Apple7 while still reporting use_gpu, which breaks the CPU-cost guards.
+    return !isAppInBackground() && ios_metal_supports_family7();
 #elif defined(Q_OS_MACOS)
     return true;
 #else
@@ -3850,6 +3859,13 @@ QString TranscriptionEngine::runWhisperInference(const float *samples16k, size_t
             ctx->aborted = true;
             return true;
         }
+#if defined(Q_OS_IOS)
+        // Submitting Metal work from the background gets the process killed by iOS.
+        if (te->m_whisperUsingGpu && isAppInBackground()) {
+            ctx->aborted = true;
+            return true;
+        }
+#endif
         // Live passes yield immediately if a new handle interrupted, or if the over ended while >=300ms of
         // un-drained audio is still waiting in the ring buffer (otherwise let this pass finish and avoid a re-encode).
         if (!ctx->finalPass) {
@@ -4607,8 +4623,9 @@ void TranscriptionEngine::workerLoop()
             }
 
             if (wantParakeet) {
+                // Never hold two models at once: wait until the busy Whisper context has been unloaded.
                 if ((reloadRequested || modelCheckTimer.elapsed() > 2000) &&
-                    !m_parakeetCtx && !m_parakeetLoadFailed.load(std::memory_order_relaxed) &&
+                    !m_parakeetCtx && !m_whisperCtx && !m_parakeetLoadFailed.load(std::memory_order_relaxed) &&
                     isParakeetDownloaded()) {
                     modelCheckTimer.restart();
                     ensureParakeetLoaded();
@@ -4621,7 +4638,7 @@ void TranscriptionEngine::workerLoop()
                     if (!desiredPath.isEmpty() && desiredPath != m_failedModelPath) {
                         const bool pathChanged = (m_loadedModelPath != desiredPath);
                         const bool gpuUpgrade = (m_whisperCtx && !m_whisperUsingGpu && gpu);
-                        if (!m_whisperCtx || ((pathChanged || gpuUpgrade) && !whisperBusy)) {
+                        if ((!m_whisperCtx && !m_parakeetCtx) || ((pathChanged || gpuUpgrade) && !whisperBusy)) {
                             ensureModelLoaded(desiredPath, gpu);
                         }
                     } else if (desiredPath.isEmpty() && m_whisperCtx && !whisperBusy) {

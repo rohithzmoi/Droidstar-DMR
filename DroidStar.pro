@@ -12,15 +12,15 @@ macx:LIBS += -framework AVFoundation -framework Accelerate -framework Metal -fra
 macx:DEFINES += GGML_USE_ACCELERATE GGML_USE_METAL
 macx:QMAKE_MACOSX_DEPLOYMENT_TARGET = 12.0
 macx:QMAKE_INFO_PLIST = Info.plist.mac
-ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit -framework MobileCoreServices -framework MediaPlayer -framework Accelerate -framework Metal -framework MetalKit -framework UserNotifications -framework Speech -framework CoreML -lz
+ios:LIBS += -framework AVFoundation -framework AudioToolbox -framework UIKit -framework MobileCoreServices -framework MediaPlayer -framework Accelerate -framework Metal -framework MetalKit -framework UserNotifications -framework Speech -framework CoreML -framework CoreBluetooth -lz
 ios:IPHONESIMULATOR_ARCHS = x86_64 arm64
 ios:CONFIG(iphonesimulator, iphoneos|iphonesimulator):LIBS += -L$$PWD/third_party/sherpa-onnx/lib/ios-simulator -lsherpa-onnx -lonnxruntime
 ios:CONFIG(iphoneos, iphoneos|iphonesimulator):LIBS += -L$$PWD/third_party/sherpa-onnx/lib/ios-arm64 -lsherpa-onnx -lonnxruntime
 ios:DEFINES += GGML_USE_ACCELERATE GGML_USE_METAL
-ios:QMAKE_IOS_DEPLOYMENT_TARGET=14.0
+ios:QMAKE_IOS_DEPLOYMENT_TARGET=15.1
 ios:QMAKE_TARGET_BUNDLE_PREFIX = org.dudetronics
 ios:QMAKE_BUNDLE = droidstar
-ios:VERSION = 0.45.06
+ios:VERSION = 0.45.07
 ios:Q_ENABLE_BITCODE.name = ENABLE_BITCODE
 ios:Q_ENABLE_BITCODE.value = NO
 ios:QMAKE_MAC_XCODE_SETTINGS += Q_ENABLE_BITCODE
@@ -56,6 +56,8 @@ SOURCES += \
         DmrSmsManager.cpp \
         dmr.cpp \
         droidstar.cpp \
+        pttbuttonmanager.cpp \
+        pttclassifier.cpp \
         httpmanager.cpp \
         iax.cpp \
         imbe_vocoder/aux_sub.cc \
@@ -90,6 +92,9 @@ SOURCES += \
         xrf.cpp \
         ysf.cpp \
         LiveActivityQtBridge.cpp \
+        QsoReplayEngine.cpp \
+        QsoReplayPlayer.cpp \
+        ReplayWavWriter.cpp \
         TranscriptionEngine.cpp \
         NetReminderManager.cpp \
         third_party/whisper/whisper.cpp \
@@ -105,8 +110,10 @@ android:SOURCES += androidserialport.cpp
 
 # Objective-C source files for macOS and iOS
 macx:OBJECTIVE_SOURCES += micpermission.mm ios_notifications.mm third_party/whisper/ggml-metal.m
-ios:OBJECTIVE_SOURCES += micpermission.mm AudioSessionManager.mm
+ios:OBJECTIVE_SOURCES += micpermission.mm AudioSessionManager.mm ios_ble_ptt.mm
+ios:HEADERS += ios_ble_ptt.h
 ios:OBJECTIVE_SOURCES += ios_live_activity.mm ios_notifications.mm ios_speech_recognizer.mm third_party/whisper/ggml-metal.m
+ios:OBJECTIVE_SOURCES += ReplayAacWriter.mm ios_replay_player.mm
 ios:CONFIG += no_autoqmake
 ios:QMAKE_CXXFLAGS += -fobjc-arc
 ios:QMAKE_CXXFLAGS += -Wno-unnecessary-virtual-specifier
@@ -122,6 +129,7 @@ ios:QMAKE_CFLAGS += -Wno-unnecessary-virtual-specifier
 # - The Widget UI is NOT in this file anymore (moved out to avoid module conflicts).
 ios:SOURCES += LiveActivityManager.swift
 ios:SOURCES += DroidStarActivityAttributes.swift
+ios:SOURCES += PttAppIntents.swift
 
 # Xcode Swift build settings (qmake needs .name/.value objects; "KEY=VALUE" strings
 # generate an empty SWIFT_VERSION and break the build after every qmake run)
@@ -162,9 +170,15 @@ resources.files = main.qml fontawesome-webfont.ttf \
                   ui2026/components/ChatAvatar.qml \
                   ui2026/components/ChatPill.qml \
                   ui2026/components/RoundIconButton.qml \
+                  ui2026/components/ReplayPlayerBar.qml \
+                  ui2026/components/PttButtonAddSheet.qml \
+                  ui2026/components/AuthCheckSheet.qml \
+                  ui2026/components/RecentTgSheet.qml \
+                  ui2026/components/TxEdgeGlow.qml \
                   ui2026/pages/MainPage.qml \
-                  ui2026/pages/MessagesPage.qml \
+                  ui2026/pages/SimplePage.qml \
                   ui2026/pages/ScanPage.qml \
+                  ui2026/pages/MessagesPage.qml \
                   ui2026/pages/SettingsPage.qml \
                   ui2026/pages/QsoPage.qml \
                   ui2026/pages/NetsPage.qml \
@@ -193,6 +207,8 @@ HEADERS += \
 	vuidupdater.h \
 	LogHandler.h \
 	AudioSessionManager.h \
+	pttbuttonmanager.h \
+	pttclassifier.h \
      Golay24128.h \
 	M17Convolution.h \
 	M17Defines.h \
@@ -252,6 +268,11 @@ HEADERS += \
 	ysf.h \
         LiveActivityQtBridge.h \
         ios_live_activity.h \
+        QsoReplayCapture.h \
+        QsoReplayEngine.h \
+        QsoReplayPlayer.h \
+        ReplayFileWriter.h \
+        ios_replay_player.h \
         TranscriptionEngine.h \
         NetReminderManager.h \
         ios_notifications.h \

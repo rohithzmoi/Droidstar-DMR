@@ -31,6 +31,7 @@ Page {
     required property var droidstarRef
     required property var appState
     property var smsManagerRef: null
+    property var pttButtonsRef: null
     property Component headerActions: null
 
     Tokens { id: t }
@@ -106,6 +107,18 @@ Page {
         { label: qsTr("Baud"),            prop: "modemBaud",         setter: "set_modemBaud" }
     ]
 
+    // BrandMeister / TGIF login check (state and sheet live in App2026)
+    readonly property bool hasDmrId: !!(appState && parseInt(appState.dmrid) > 0)
+    readonly property var authNets: {
+        var n = []
+        if (appState && appState.bmPass) n.push("BM")
+        if (appState && appState.tgifPass) n.push("TGIF")
+        return n
+    }
+    function autoVerify(nets) {
+        if (page.app && typeof page.app.verifyDmrAuth === "function") page.app.verifyDmrAuth(nets, true)
+    }
+
     // Generic text setting: optimistic UI state on each keystroke, backend on commit.
     function editState(prop, v) { if (page.appState) page.appState[prop] = v }
     function commitState(prop, setter, v) {
@@ -129,7 +142,9 @@ Page {
             width: Math.min(flick.width - 20, t.maxContentWidth)
             spacing: 12
 
+            // ─────────────────────────────────────────────────────────
             // IDENTITY
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Identity")
                 statusText: page.appState ? page.appState.callsign : ""
@@ -162,7 +177,7 @@ Page {
                             inputMethodHints: Qt.ImhDigitsOnly
                             validator: RegularExpressionValidator { regularExpression: /[0-9]{0,8}/ }
                             onEdited: function(v) { page.editState("dmrid", v) }
-                            onCommitted: function(v) { page.commitState("dmrid", "set_dmrid", v) }
+                            onCommitted: function(v) { page.commitState("dmrid", "set_dmrid", v); page.autoVerify(["BM", "TGIF"]) }
                         }
 
                         ColumnLayout {
@@ -191,7 +206,7 @@ Page {
                             password: true
                             placeholderText: qsTr("Brandmeister hotspot password")
                             onEdited: function(v) { page.editState("bmPass", v) }
-                            onCommitted: function(v) { page.commitState("bmPass", "set_bm_password", v) }
+                            onCommitted: function(v) { page.commitState("bmPass", "set_bm_password", v); page.autoVerify(["BM"]) }
                         }
                         FormField {
                             label: qsTr("TGIF Password")
@@ -199,7 +214,7 @@ Page {
                             password: true
                             placeholderText: qsTr("TGIF hotspot password")
                             onEdited: function(v) { page.editState("tgifPass", v) }
-                            onCommitted: function(v) { page.commitState("tgifPass", "set_tgif_password", v) }
+                            onCommitted: function(v) { page.commitState("tgifPass", "set_tgif_password", v); page.autoVerify(["TGIF"]) }
                         }
                         FormField {
                             Layout.columnSpan: page.colsSecrets === 2 ? 2 : 1
@@ -211,10 +226,106 @@ Page {
                             onCommitted: function(v) { page.commitState("aslPass", "set_asl_password", v) }
                         }
                     }
+
+                    // Login check for the saved BrandMeister / TGIF hotspot passwords
+                    Rectangle {
+                        id: authBar
+                        Layout.fillWidth: true
+                        visible: page.hasDmrId && page.authNets.length > 0
+                        implicitHeight: 52
+                        radius: 12
+                        color: t.surface2
+                        border.color: t.stroke
+                        border.width: 1
+
+                        readonly property var st: (page.app && page.app.authStatus) ? page.app.authStatus : ({})
+                        readonly property bool checking: st.BM === "checking" || st.TGIF === "checking"
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 6
+                            spacing: 8
+
+                            Label {
+                                visible: authBar.width >= 330
+                                text: qsTr("Login")
+                                font.pixelSize: t.fsSmall
+                                color: t.textMuted
+                            }
+                            Repeater {
+                                model: page.authNets
+                                delegate: Rectangle {
+                                    id: chip
+                                    required property string modelData
+                                    readonly property string s: authBar.st[modelData] || ""
+                                    readonly property color c: s === "rejected" ? t.danger
+                                                             : s === "unreachable" ? t.warning
+                                                             : (s === "ok" || s === "default") ? t.success : t.textMuted
+                                    implicitHeight: 28
+                                    implicitWidth: chipRow.implicitWidth + 18
+                                    Layout.minimumWidth: 0
+                                    radius: 14
+                                    color: t.tint(c, 0.14)
+                                    border.color: t.tint(c, 0.5)
+                                    border.width: 1
+                                    Row {
+                                        id: chipRow
+                                        anchors.centerIn: parent
+                                        spacing: 5
+                                        Label {
+                                            text: chip.modelData === "TGIF" ? "TGIF" : "BM"
+                                            font.pixelSize: t.fsSmall
+                                            font.bold: true
+                                            color: t.text
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                        BusyIndicator {
+                                            visible: chip.s === "checking"
+                                            running: visible
+                                            width: 12; height: 12; padding: 0
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                        Label {
+                                            visible: chip.s !== "checking"
+                                            text: chip.s === "rejected" ? "\uf00d" : chip.s === "unreachable" ? "\uf071"
+                                                : (chip.s === "ok" || chip.s === "default") ? "\uf00c" : "\uf128"
+                                            font.family: "FontAwesome"
+                                            font.pixelSize: 11
+                                            color: chip.c
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        enabled: chip.s === "rejected" || chip.s === "unreachable"
+                                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: if (page.app) page.app.showAuthSheet([chip.modelData])
+                                    }
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                            AppButton {
+                                text: qsTr("Verify")
+                                glyph: "\uf00c"
+                                busy: authBar.checking
+                                enabled: !authBar.checking
+                                implicitHeight: 38
+                                font.pixelSize: t.fsSmall + 1
+                                onClicked: {
+                                    // Push any half-typed password first
+                                    page.forceActiveFocus()
+                                    if (page.app) page.app.verifyDmrAuth(page.authNets, false)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // LIVE TRANSCRIPTION (Apple Neural Engine streaming or local Whisper)
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 id: transcriptionSection
                 readonly property bool appleSupported: !!(page.appState && page.appState.transcriptionAppleSupported)
@@ -465,7 +576,7 @@ Page {
                         }
                     }
 
-                    // Active parallel / queued model downloads list (persists across engine switches
+                    // Active parallel / queued model downloads list (persists across engine switches & tab changes)
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 6
@@ -545,7 +656,159 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // AUDIO & DEVICES
+            // ─────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────
+            // QSO REPLAY
+            // ─────────────────────────────────────────────────────────
+            CollapsibleSection {
+                id: replaySection
+                readonly property bool on: !!(page.appState && page.appState.replayEnabled)
+                readonly property var budgetOptions: [50, 100, 250, 500]
+                readonly property bool customBudget: page.appState ? budgetOptions.indexOf(page.appState.replayStorageMb) < 0 : false
+
+                title: qsTr("QSO Replay")
+                statusText: on
+                            ? ((page.appState && page.app && page.appState.replayCount > 0)
+                               ? qsTr("On · %1").arg(page.app.formatReplayBytes(page.appState.replayUsedBytes))
+                               : qsTr("On"))
+                            : qsTr("Off")
+                statusColor: on ? t.success : t.textMuted
+                expanded: false
+
+                content: ColumnLayout {
+                    spacing: 12
+
+                    ToggleRow {
+                        text: qsTr("QSO Replay")
+                        description: qsTr("Keeps a replay of every received over with its QSO log entry, so you can listen again any time. Replays stay on this device: never exported, shared or backed up.")
+                        checked: replaySection.on
+                        activeColor: t.success
+                        onToggled: function(on) { if (page.app) page.app.setReplayEnabled(on) }
+                    }
+
+                    ToggleRow {
+                        text: qsTr("Replay my own transmissions")
+                        description: (page.appState && page.appState.disableSelfLog)
+                                     ? qsTr("Turn off \"Exclude my own transmissions\" in the QSO log settings to record your TX.")
+                                     : qsTr("Also keeps a replay of each over you transmit, logged under your callsign.")
+                        enabled: replaySection.on && !!(page.appState && !page.appState.disableSelfLog)
+                        checked: !!(page.appState && page.appState.replayRecordTx)
+                        activeColor: t.success
+                        onToggled: function(on) { if (page.app) page.app.setReplayRecordTx(on) }
+                    }
+
+                    // Storage budget: oldest replays are removed first once it is reached
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        spacing: 6
+
+                        Label { text: qsTr("Storage budget"); font.pixelSize: t.fsCaption; color: t.textMuted }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: page.colsToggle === 2 ? 4 : 2
+                            columnSpacing: 8
+                            rowSpacing: 8
+                            Repeater {
+                                model: replaySection.budgetOptions
+                                delegate: ChipToggle {
+                                    required property int modelData
+                                    Layout.fillWidth: true
+                                    text: qsTr("%1 MB · %2").arg(modelData).arg(page.app ? page.app.replayHoursText(modelData) : "")
+                                    checked: !!(page.appState && page.appState.replayStorageMb === modelData)
+                                    activeColor: t.success
+                                    onClicked: {
+                                        if (page.app) page.app.setReplayStorageMb(modelData)
+                                        customBudgetField.text = ""
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+
+                            Label {
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                text: qsTr("Custom (50–2000 MB)")
+                                font.pixelSize: t.fsSmall
+                                color: t.text
+                                wrapMode: Text.WordWrap
+                            }
+                            Label {
+                                visible: customBudgetField.text !== "" && page.app
+                                text: page.app ? page.app.replayHoursText(parseInt(customBudgetField.text) || 0) : ""
+                                font.pixelSize: t.fsCaption
+                                color: t.textMuted
+                            }
+                            AppTextField {
+                                id: customBudgetField
+                                Layout.preferredWidth: 96
+                                inputMethodHints: Qt.ImhDigitsOnly
+                                horizontalAlignment: TextInput.AlignHCenter
+                                validator: IntValidator { bottom: 50; top: 2000 }
+                                placeholderText: qsTr("MB")
+                                Component.onCompleted: if (replaySection.customBudget && page.appState) text = "" + page.appState.replayStorageMb
+                                Connections {
+                                    target: page.appState
+                                    function onReplayStorageMbChanged() {
+                                        if (!customBudgetField.activeFocus)
+                                            customBudgetField.text = replaySection.customBudget ? ("" + page.appState.replayStorageMb) : ""
+                                    }
+                                }
+                                function commit() {
+                                    var n = parseInt(text || "0")
+                                    if (isNaN(n) || n <= 0) { text = ""; return }
+                                    n = Math.max(50, Math.min(2000, n))
+                                    if (page.app) page.app.setReplayStorageMb(n)
+                                    text = replaySection.budgetOptions.indexOf(n) < 0 ? ("" + n) : ""
+                                }
+                                onAccepted: { commit(); focus = false }
+                                onEditingFinished: commit()
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: (page.appState && page.app)
+                                  ? (page.appState.replayCount === 0
+                                     ? qsTr("No replays stored yet.")
+                                     : qsTr("Using %1 · %2 replays · %3 left")
+                                           .arg(page.app.formatReplayBytes(page.appState.replayUsedBytes))
+                                           .arg(page.appState.replayCount)
+                                           .arg(page.app.replayHoursText(Math.max(0, page.appState.replayStorageMb - page.appState.replayUsedBytes / 1048576))))
+                                  : ""
+                            font.pixelSize: t.fsCaption
+                            color: t.textMuted
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !!(page.appState && page.appState.replayLastError !== "" && replaySection.on)
+                            text: page.appState ? page.appState.replayLastError : ""
+                            font.pixelSize: t.fsCaption
+                            color: t.warning
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    AppButton {
+                        Layout.fillWidth: true
+                        text: qsTr("Clear all replays")
+                        glyph: "\uf1f8"
+                        tone: "danger"
+                        enabled: !!(page.appState && page.appState.replayCount > 0)
+                        onClicked: confirmClearReplaysDialog.open()
+                    }
+                }
+            }
+
             CollapsibleSection {
                 title: qsTr("Audio & Devices")
                 expanded: false
@@ -762,7 +1025,9 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // D-STAR / ROUTING
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("D-STAR / Routing")
                 expanded: false
@@ -806,7 +1071,9 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // PROFILE
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Profile / Location")
                 expanded: false
@@ -876,7 +1143,9 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // DMR / TX OPTIONS
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("DMR / TX Options")
                 expanded: false
@@ -982,7 +1251,9 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // NETWORK
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Network & TX Behaviour")
                 expanded: false
@@ -1028,7 +1299,258 @@ Page {
                 }
             }
 
+
+            // ─────────────────────────────────────────────────────────
+            // PTT BUTTON (headset / Bluetooth / keyboard-type)
+            // ─────────────────────────────────────────────────────────
+            CollapsibleSection {
+                id: pttSection
+                title: qsTr("PTT Button")
+                expanded: false
+                statusText: page.pttButtonsRef ? page.pttButtonsRef.statusText : ""
+
+                readonly property var mgr: page.pttButtonsRef
+                readonly property string btState: mgr ? mgr.bluetoothState : "unsupported"
+                readonly property bool btReady: btState === "poweredOn"
+
+                content: ColumnLayout {
+                    spacing: 10
+
+                    ToggleRow {
+                        text: qsTr("Headset button")
+                        description: qsTr("Earbud play/pause taps TX on and off. Turn off if TX keys by itself when earbuds connect or are worn")
+                        checked: !!(pttSection.mgr && pttSection.mgr.mediaButtonEnabled)
+                        onToggled: function(on) { if (pttSection.mgr) pttSection.mgr.mediaButtonEnabled = on }
+                    }
+                    ToggleRow {
+                        text: qsTr("Track buttons")
+                        description: qsTr("Next and previous track keys on car steering wheels and headsets also tap TX")
+                        enabled: !!(pttSection.mgr && pttSection.mgr.mediaButtonEnabled)
+                        checked: !!(pttSection.mgr && pttSection.mgr.mediaTrackButtonsEnabled)
+                        onToggled: function(on) { if (pttSection.mgr) pttSection.mgr.mediaTrackButtonsEnabled = on }
+                    }
+
+                    // Bluetooth availability banner
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: !!pttSection.mgr && pttSection.mgr.bleSupported && !pttSection.btReady
+                                 && (pttSection.btState !== "unknown" || pttSection.mgr.deviceCount > 0)
+                        implicitHeight: btBanner.implicitHeight + 20
+                        radius: 12
+                        color: t.tint(t.warning, 0.12)
+                        border.color: t.tint(t.warning, 0.5)
+                        border.width: 1
+
+                        RowLayout {
+                            id: btBanner
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: 12
+                            spacing: 10
+                            Label {
+                                text: "\uf294"
+                                font.family: "FontAwesome"
+                                font.pixelSize: 16
+                                color: t.warning
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                font.pixelSize: t.fsSmall + 1
+                                color: t.text
+                                text: pttSection.btState === "unauthorized"
+                                      ? qsTr("Bluetooth permission is needed for PTT buttons.")
+                                      : pttSection.btState === "poweredOff"
+                                        ? qsTr("Bluetooth is off.")
+                                        : pttSection.btState === "unsupported"
+                                          ? qsTr("Bluetooth LE is not available on this device.")
+                                          : qsTr("Waiting for Bluetooth…")
+                            }
+                            AppButton {
+                                visible: pttSection.btState === "unauthorized"
+                                text: qsTr("Open Settings")
+                                onClicked: if (pttSection.mgr) pttSection.mgr.openBluetoothSettings()
+                            }
+                        }
+                    }
+
+                    // Saved buttons
+                    Repeater {
+                        model: pttSection.mgr ? pttSection.mgr.devices : []
+                        delegate: Rectangle {
+                            id: devRow
+                            required property var modelData
+                            required property int index
+                            readonly property bool isBle: modelData.kind === "ble"
+                            readonly property bool clickOnly: modelData.capability !== "hold"
+                            readonly property color dotColor: modelData.statusKey === "connected" || modelData.statusKey === "ready" ? t.success
+                                                             : modelData.statusKey === "connecting" ? t.accent
+                                                             : modelData.statusKey === "sleeping" ? t.warning
+                                                             : t.textMuted
+
+                            Layout.fillWidth: true
+                            implicitHeight: devCol.implicitHeight + 24
+                            radius: 12
+                            color: modelData.pressed ? t.tint(t.txLiveBorder, 0.18) : t.surface
+                            border.color: modelData.pressed ? t.txLiveBorder : t.stroke
+                            border.width: 1
+                            Behavior on color { ColorAnimation { duration: t.durFast } }
+
+                            ColumnLayout {
+                                id: devCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 12
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Rectangle { width: 9; height: 9; radius: 4.5; color: devRow.dotColor }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData.name
+                                        font.pixelSize: t.fsBody
+                                        font.bold: true
+                                        color: t.text
+                                        elide: Text.ElideRight
+                                    }
+                                    Rectangle {
+                                        radius: 8
+                                        color: t.tint(t.accent, 0.14)
+                                        border.color: t.tint(t.accent, 0.5)
+                                        implicitWidth: kindLabel.implicitWidth + 14
+                                        implicitHeight: 20
+                                        Label {
+                                            id: kindLabel
+                                            anchors.centerIn: parent
+                                            text: devRow.isBle ? qsTr("Bluetooth") : qsTr("Keyboard")
+                                            font.pixelSize: t.fsCaption
+                                            color: t.accent
+                                        }
+                                    }
+                                    Switch {
+                                        checked: modelData.enabled
+                                        Accessible.name: qsTr("Enabled")
+                                        onToggled: if (pttSection.mgr) pttSection.mgr.setDeviceEnabled(modelData.id, checked)
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    font.pixelSize: t.fsSmall
+                                    color: t.textMuted
+                                    text: modelData.status
+                                          + (modelData.signatureName !== "" ? "  •  " + modelData.signatureName : "")
+                                          + (devRow.clickOnly ? "  •  " + qsTr("click-only") : "  •  " + qsTr("press and release"))
+                                          + (modelData.tentative ? "  •  " + qsTr("needs confirming") : "")
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Label {
+                                        text: qsTr("Behaviour")
+                                        font.pixelSize: t.fsSmall
+                                        color: t.textMuted
+                                    }
+                                    SegmentedControl {
+                                        Layout.fillWidth: true
+                                        options: [
+                                            { label: qsTr("Auto"), value: "auto" },
+                                            { label: qsTr("Hold"), value: "hold", disabled: devRow.clickOnly,
+                                              disabledReason: qsTr("This button only sends clicks, so it can only toggle") },
+                                            { label: qsTr("Toggle"), value: "toggle" }
+                                        ]
+                                        currentValue: modelData.behaviour
+                                        onSelected: function(value) { if (pttSection.mgr) pttSection.mgr.setDeviceBehaviour(modelData.id, value) }
+                                        onDisabledSelected: function(value, reason) { if (page.app) page.app.notify(reason, "", null, "info") }
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.effective === "hold" ? qsTr("Now: hold to talk") : qsTr("Now: tap to toggle")
+                                    font.pixelSize: t.fsCaption
+                                    color: t.textMuted
+                                    elide: Text.ElideRight
+                                }
+                                // Wraps onto two lines on narrow phones instead of overflowing
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    AppButton {
+                                        visible: devRow.isBle
+                                        text: qsTr("Re-learn")
+                                        glyph: "\uf021"
+                                        onClicked: {
+                                            if (!pttSection.mgr) return
+                                            pttSection.mgr.relearnDevice(modelData.id)
+                                            pttAddSheet.openForRelearn()
+                                        }
+                                    }
+                                    AppButton {
+                                        text: qsTr("Remove")
+                                        tone: "danger"
+                                        glyph: "\uf1f8"
+                                        onClicked: {
+                                            pttRemoveDialog.targetId = modelData.id
+                                            pttRemoveDialog.targetName = modelData.name
+                                            pttRemoveDialog.open()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: page.colsToggle
+                        columnSpacing: 8
+                        rowSpacing: 8
+                        AppButton {
+                            Layout.fillWidth: true
+                            text: qsTr("Add Bluetooth button")
+                            tone: "primary"
+                            glyph: "\uf294"
+                            enabled: !!pttSection.mgr && pttSection.mgr.bleSupported
+                            onClicked: pttAddSheet.openForScan()
+                        }
+                        AppButton {
+                            Layout.fillWidth: true
+                            text: qsTr("Add keyboard button")
+                            glyph: "\uf11c"
+                            enabled: !!pttSection.mgr
+                            onClicked: pttAddSheet.openForKey()
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: !!pttSection.mgr && pttSection.mgr.lastEventText !== ""
+                        text: qsTr("Last event: %1").arg(pttSection.mgr ? pttSection.mgr.lastEventText : "")
+                        font.pixelSize: t.fsCaption
+                        color: t.textMuted
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: t.fsCaption
+                        color: t.textMuted
+                        text: qsTr("Bluetooth buttons work with the screen off. Keyboard buttons work only while the app is open. For the iPhone Action Button, Siri or Shortcuts, use the DroidStar \"Push to Talk\" shortcut.")
+                    }
+                }
+            }
+
+            // ─────────────────────────────────────────────────────────
             // MODEM TUNING (Advanced)
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Modem Tuning (Advanced)")
                 expanded: false
@@ -1052,7 +1574,9 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // MAINTENANCE
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Maintenance")
                 expanded: false
@@ -1110,7 +1634,9 @@ Page {
                 }
             }
 
+            // ─────────────────────────────────────────────────────────
             // TTS (only if USE_FLITE)
+            // ─────────────────────────────────────────────────────────
             CollapsibleSection {
                 title: qsTr("Text-to-Speech")
                 expanded: false
@@ -1141,6 +1667,66 @@ Page {
             }
 
             Item { Layout.preferredHeight: 24 }
+        }
+    }
+    // PTT button helpers
+    PttButtonAddSheet {
+        id: pttAddSheet
+        manager: page.pttButtonsRef
+        app: page.app
+    }
+
+    AppDialog {
+        id: confirmClearReplaysDialog
+        maxWidth: 400
+        title: qsTr("Clear all replays?")
+        destructiveText: qsTr("Clear replays")
+        standardButtons: Dialog.Cancel | Dialog.Discard
+
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                text: (page.appState && page.app)
+                      ? qsTr("All %1 replays (%2) will be permanently removed from this device. Your QSO log entries stay.")
+                            .arg(page.appState.replayCount).arg(page.app.formatReplayBytes(page.appState.replayUsedBytes))
+                      : ""
+                wrapMode: Text.WordWrap
+                color: t.text
+            }
+        }
+
+        onDiscarded: {
+            if (page.app) page.app.clearAllReplays()
+            close()
+            if (page.app) page.app.notify(qsTr("All replays cleared"), "", null, "success")
+        }
+    }
+
+    AppDialog {
+        id: pttRemoveDialog
+        maxWidth: 400
+        title: qsTr("Remove PTT button?")
+        destructiveText: qsTr("Remove")
+        standardButtons: Dialog.Cancel | Dialog.Discard
+
+        property string targetId: ""
+        property string targetName: ""
+
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Remove \"%1\"? You can add it again later.").arg(pttRemoveDialog.targetName)
+                wrapMode: Text.WordWrap
+                color: t.text
+            }
+        }
+
+        onDiscarded: {
+            if (page.pttButtonsRef && targetId !== "") page.pttButtonsRef.forgetDevice(targetId)
+            close()
+            if (page.app) page.app.notify(qsTr("PTT button removed"), "", null, "info")
         }
     }
 }

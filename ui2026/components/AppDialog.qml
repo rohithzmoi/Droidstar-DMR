@@ -47,11 +47,12 @@ Dialog {
         var h = Math.max(120, Math.min(implicitHeight, availableDialogHeight))
         if (Math.abs(height - h) > 0.5) height = h
     }
-    // Applied after changes settle; binding height to implicitHeight re-enters the popup's
+    // Applied after changes settle; binding height to implicitHeight re-enters the popup's own sizing
     onImplicitHeightChanged: Qt.callLater(fitHeight)
     onAvailableDialogHeightChanged: Qt.callLater(fitHeight)
 
-    // Width is applied the same way: the overlay parent attaches after creation,
+    // Width is applied the same way: the overlay parent attaches after creation, and a width
+    // binding that jumps then re-wraps the body text inside the popup's own size evaluation.
     function fitWidth() {
         var w = parentWidth > 0 ? Math.max(260, Math.min(parentWidth - safeLeft - safeRight - 32, maxWidth))
                                 : maxWidth

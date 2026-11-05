@@ -175,8 +175,15 @@ Page {
             targetModel.remove(targetModel.count - 1)
     }
 
-    onFilteredHoselineCallsChanged: page._syncCardsModel(liveCardsModel, page.filteredHoselineCalls)
-    onFilteredFavCallsChanged: page._syncCardsModel(favCardsModel, page.filteredFavCalls)
+    // Hoseline pushes a fresh table every ~800 ms while live; only rewrite the card models when
+    // this page is actually on screen, and catch up once when it becomes visible again.
+    onFilteredHoselineCallsChanged: if (page.visible) page._syncCardsModel(liveCardsModel, page.filteredHoselineCalls)
+    onFilteredFavCallsChanged: if (page.visible) page._syncCardsModel(favCardsModel, page.filteredFavCalls)
+    onVisibleChanged: {
+        if (!page.visible) return
+        page._syncCardsModel(liveCardsModel, page.filteredHoselineCalls)
+        page._syncCardsModel(favCardsModel, page.filteredFavCalls)
+    }
     Component.onCompleted: {
         page._syncCardsModel(liveCardsModel, page.filteredHoselineCalls)
         page._syncCardsModel(favCardsModel, page.filteredFavCalls)
@@ -255,7 +262,6 @@ Page {
                             radius: height / 2
                             width: Math.max(height, (parent.width - 2) * level)
                             color: (page.appState && page.appState.txActive) ? t.danger : (level > 0.85 ? t.warning : t.success)
-                            Behavior on width { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                         }
                     }
 
@@ -268,7 +274,8 @@ Page {
                                 value: "hoseline"
                             },
                             {
-                                label: qsTr("Favourite Scan") + ((page.appState && page.appState.hoselineActiveFavCount > 0)
+                                label: (page.compact ? qsTr("Favourites") : qsTr("Favourite Scan"))
+                                       + ((page.appState && page.appState.hoselineActiveFavCount > 0)
                                        ? (" (" + page.appState.hoselineActiveFavCount + " " + qsTr("Live") + ")")
                                        : ((page.appState && page.appState.favouriteTgids && page.appState.favouriteTgids.length > 0)
                                           ? (" (" + page.appState.favouriteTgids.length + ")") : "")),
@@ -315,7 +322,9 @@ Page {
                                     color: (page.appState && page.appState.hoselineConnected) ? t.success : t.warning
 
                                     SequentialAnimation on opacity {
+                                        // Hoseline stays connected while on other pages; only animate when this page is actually shown.
                                         running: !!(page.appState && (page.appState.hoselineConnected || page.appState.favScanActive || page.appState.allScanActive))
+                                                 && page.visible && Qt.application.state === Qt.ApplicationActive
                                         loops: Animation.Infinite
                                         alwaysRunToEnd: true
                                         NumberAnimation { to: 0.3; duration: 550; easing.type: Easing.InOutSine }
@@ -642,7 +651,8 @@ Page {
                     radius: t.rMd
 
                     ColumnLayout {
-                        Layout.fillWidth: true
+                        // Pane children are not laid out by the parent Layout: bind the width explicitly
+                        width: parent.width
                         spacing: 8
 
                         Label {
@@ -775,14 +785,17 @@ Page {
                                         }
                                     }
 
-                                    // Talkgroup Name
+                                    // Talkgroup Name (wraps to a second line before eliding)
                                     Label {
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: 0
+                                        Layout.preferredWidth: 1
                                         text: tgCard.tgName || qsTr("Talkgroup %1").arg(tgCard.tgid)
                                         font.pixelSize: t.fsBody
                                         font.bold: true
                                         color: t.text
+                                        wrapMode: Text.WordWrap
+                                        maximumLineCount: 2
                                         elide: Text.ElideRight
                                     }
 
@@ -793,7 +806,7 @@ Page {
                                               : page.formatAgo(tgCard.agoSec)
                                         font.pixelSize: t.fsCaption
                                         font.bold: tgCard.isLive
-                                        font.family: (page.appState && page.appState.monoFont !== "") ? page.appState.monoFont : font.family
+                                        font.family: (page.appState && page.appState.monoFont !== "") ? page.appState.monoFont : Qt.application.font.family
                                         color: tgCard.isLive ? t.success : t.textMuted
                                     }
 
@@ -940,7 +953,7 @@ Page {
                     radius: t.rMd
 
                     ColumnLayout {
-                        Layout.fillWidth: true
+                        width: parent.width
                         spacing: 8
 
                         RowLayout {
@@ -1009,7 +1022,7 @@ Page {
                     radius: t.rMd
 
                     ColumnLayout {
-                        Layout.fillWidth: true
+                        width: parent.width
                         spacing: 10
 
                         Label {
@@ -1191,14 +1204,17 @@ Page {
                                         }
                                     }
 
-                                    // TG Name
+                                    // TG Name (wraps to a second line before eliding)
                                     Label {
                                         Layout.fillWidth: true
                                         Layout.minimumWidth: 0
+                                        Layout.preferredWidth: 1
                                         text: favCard.tgName || qsTr("Talkgroup %1").arg(favCard.tgid)
                                         font.pixelSize: t.fsBody
                                         font.bold: true
                                         color: t.text
+                                        wrapMode: Text.WordWrap
+                                        maximumLineCount: 2
                                         elide: Text.ElideRight
                                     }
 
@@ -1225,10 +1241,10 @@ Page {
                                         }
                                     }
 
-                                    // Unpin / Unstar button
+                                    // Unpin / Unstar button (28pt minimum tap target)
                                     ToolButton {
-                                        implicitWidth: 26
-                                        implicitHeight: 26
+                                        implicitWidth: 30
+                                        implicitHeight: 30
                                         padding: 0
                                         text: "\uf005"
                                         font.family: "FontAwesome"

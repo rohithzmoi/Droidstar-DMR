@@ -69,6 +69,7 @@ ApplicationWindow {
         property string transcriptionModel: "base"
         property string smsRestoreTg: ""
         property bool smsRestorePc: false
+        property bool simpleHome: false
     }
 
     // Material base
@@ -95,9 +96,14 @@ ApplicationWindow {
     property var liveActivityRef: (typeof liveActivity !== "undefined") ? liveActivity : null
     property var transcriptionEngineRef: (typeof transcriptionEngine !== "undefined") ? transcriptionEngine : null
     property var smsManagerRef: (typeof smsManager !== "undefined") ? smsManager : null
-    // Engine turn ids restart at 0 each launch; logged turns are keyed
+    // Engine turn ids restart at 0 each launch; logged turns are keyed by session so a new turn never overwrites an old one
     readonly property string _transcriptSessionId: Date.now().toString(36)
     property var netReminderManagerRef: (typeof netReminderManager !== "undefined") ? netReminderManager : null
+    // Hardware PTT buttons (headset media button, Bluetooth LE buttons, keyboard-type buttons)
+    property var pttButtonsRef: (typeof pttButtons !== "undefined") ? pttButtons : null
+    // QSO Replay (on-device replay of received / own overs attached to the QSO log)
+    property var replayEngineRef: (typeof replayEngine !== "undefined") ? replayEngine : null
+    property var replayPlayerRef: (typeof replayPlayer !== "undefined") ? replayPlayer : null
 
     // Realtime QSO logging (legacy parity) - driven by VUIDUpdater replies
     property int _pendingLogDmr: 0
@@ -109,7 +115,9 @@ ApplicationWindow {
     property bool initialized: false
     property bool initializing: false
 
-    // SAFE AREA (notch / Dynamic Island / home indicator / landscape sensor
+    // ─────────────────────────────────────────────────────────
+    // SAFE AREA (notch / Dynamic Island / home indicator / landscape sensor housing)
+    // ─────────────────────────────────────────────────────────
     QtObject {
         id: safeAreaObj
         property real top: 0
@@ -145,15 +153,20 @@ ApplicationWindow {
     onWidthChanged: safeAreaTimer.restart()
     onHeightChanged: safeAreaTimer.restart()
 
+    // ─────────────────────────────────────────────────────────
     // RESPONSIVE NAVIGATION
-    // Tablets/desktop only: a phone in landscape is wide but too short
+    // ─────────────────────────────────────────────────────────
+    // Tablets/desktop only: a phone in landscape is wide but too short for a permanent sidebar.
     readonly property bool navDocked: width >= t.dockedNavBreakpoint && height >= 560
     readonly property bool compact: width < 400
-    onNavDockedChanged: if (!navDocked) navDrawer.close()
+    // open()/close() replace the Drawer's position binding, so both directions are driven here
+    onNavDockedChanged: navDocked ? navDrawer.open() : navDrawer.close()
 
-    readonly property var pageKeys: ["main", "scan", "messages", "settings", "qso", "nets", "log", "hosts", "about"]
+    readonly property var pageKeys: ["main", "simple", "scan", "messages", "settings", "qso", "nets", "log", "hosts", "about"]
     property string currentPage: "main"
-    property var _visited: ["main"]
+    // "main" is Home; Simple mode shows it through the "simple" page slot
+    readonly property string _pageSlot: (currentPage === "main" && controlSettings.simpleHome) ? "simple" : currentPage
+    property var _visited: []
     property string pendingMessageThread: ""
     property double _lastScanHopMs: 0
     property double _lastRxEndMs: 0
@@ -166,7 +179,7 @@ ApplicationWindow {
     property bool _resumeTuneSilent: false
 
     readonly property var currentPageItem: {
-        var idx = pageKeys.indexOf(currentPage)
+        var idx = pageKeys.indexOf(_pageSlot)
         if (idx < 0 || pageRepeater.count <= idx) return null
         var l = pageRepeater.itemAt(idx)
         return l ? l.item : null
@@ -179,8 +192,15 @@ ApplicationWindow {
         window._visited = v
     }
 
+    function setSimpleHome(on) {
+        if (controlSettings.simpleHome === !!on) return
+        flushPendingEdits()
+        controlSettings.simpleHome = !!on
+        window.updateHoselineStreamLifecycle()
+    }
+
     function navigate(key) {
-        if (pageKeys.indexOf(key) < 0) return
+        if (pageKeys.indexOf(key) < 0 || key === "simple") return
         if (window.smsManagerRef && typeof window.smsManagerRef.setChatKeyboardMode === "function") {
             window.smsManagerRef.setChatKeyboardMode(key === "messages")
         }
@@ -192,6 +212,95 @@ ApplicationWindow {
 
     function notify(message, actionText, action, kind) {
         toaster.show(message, actionText, action, kind)
+    }
+
+    // ── BrandMeister / TGIF login check ──
+    // Settings Verify, auto check on password/ID commit, and the sheet for a rejected connect.
+    property var authStatus: ({ BM: "", TGIF: "" })  // "", checking, ok, default, rejected, unreachable
+    property var _authBatch: []
+    property var _authCheckedKey: ({})               // network -> "id|password" last answered
+
+    function _authKey(n) { return String(appState.dmrid) + "|" + (n === "TGIF" ? appState.tgifPass : appState.bmPass) }
+    function _setAuthStatus(n, s) {
+        var o = Object.assign({}, window.authStatus)
+        o[n] = s
+        window.authStatus = o
+    }
+    function _authName(n) { return n === "TGIF" ? "TGIF" : "BrandMeister" }
+
+    function verifyDmrAuth(nets, auto) {
+        if (!droidstar || typeof droidstar.verify_dmr_auth !== "function") return
+        var hasId = parseInt(appState.dmrid) > 0
+        var batch = window._authBatch.slice()
+        for (var i = 0; i < nets.length; i++) {
+            var n = nets[i]
+            var pass = (n === "TGIF") ? appState.tgifPass : appState.bmPass
+            if (!hasId || !pass) { window._setAuthStatus(n, ""); continue }
+            // Auto checks run once per id/password pair; a missed reply is worth retrying.
+            if (auto && window._authCheckedKey[n] === window._authKey(n) && window.authStatus[n] !== "unreachable") continue
+            if (batch.indexOf(n) < 0) batch.push(n)
+            window._setAuthStatus(n, "checking")
+            droidstar.verify_dmr_auth(n)
+        }
+        window._authBatch = batch
+    }
+
+    function showAuthSheet(nets) {
+        var merged = authSheet.opened ? authSheet.networks.slice() : []
+        for (var i = 0; i < nets.length; i++) if (merged.indexOf(nets[i]) < 0) merged.push(nets[i])
+        authSheet.show(merged)
+    }
+
+    function _finishAuthBatch() {
+        var batch = window._authBatch
+        window._authBatch = []
+        var failed = false, ok = [], securityOff = false
+        for (var i = 0; i < batch.length; i++) {
+            var s = window.authStatus[batch[i]]
+            if (s === "rejected" || s === "unreachable") failed = true
+            else if (s === "ok" || s === "default") { ok.push(window._authName(batch[i])); if (s === "default") securityOff = true }
+        }
+        if (failed || authSheet.opened) { window.showAuthSheet(batch); return }
+        if (ok.length === 0) return
+        var msg = ok.length > 1 ? qsTr("%1 and %2 login verified").arg(ok[0]).arg(ok[1])
+                                : qsTr("%1 login verified").arg(ok[0])
+        if (securityOff) msg += qsTr(". TGIF hotspot security is off")
+        window.notify(msg, "", null, "success")
+    }
+
+    Connections {
+        target: droidstar
+        enabled: droidstar !== null
+        ignoreUnknownSignals: true
+        function onDmr_auth_result(network, result) {
+            var n = String(network)
+            if (window.authStatus[n] !== "checking") return
+            var r = (result === "missing") ? "" : String(result)
+            if (r !== "unreachable") {
+                var k = Object.assign({}, window._authCheckedKey)
+                k[n] = window._authKey(n)
+                window._authCheckedKey = k
+            }
+            window._setAuthStatus(n, r)
+            for (var i = 0; i < window._authBatch.length; i++)
+                if (window.authStatus[window._authBatch[i]] === "checking") return
+            window._finishAuthBatch()
+        }
+    }
+
+    // A connect that hangs with IPv6 on is almost always a host without a usable IPv6 route:
+    // turn IPv6 off and reconnect once. M17 is skipped since its hosts carry explicit IPv6 addresses.
+    Timer {
+        id: ipv6Watch
+        interval: 6000
+        onTriggered: {
+            if (!droidstar || !appState.connecting || appState.connected || !appState.ipv6 || appState.mode === "M17") return
+            appState.ipv6 = false
+            droidstar.set_ipv6(false)
+            window.notify(qsTr("IPv6 was blocking the connection. Turned it off and reconnecting."), "", null, "info")
+            window.connectOrDisconnect()               // cancel the stuck attempt
+            Qt.callLater(window.connectOrDisconnect)   // and connect again over IPv4
+        }
     }
 
     function openMessageTo(dmrId, callsign, isGroup) {
@@ -214,7 +323,8 @@ ApplicationWindow {
         window.smsManagerRef.openThread(key)
     }
 
-    // SMS standby: private call to our own ID, so no voice talkgroup
+    // SMS standby: private call to our own ID, so no voice talkgroup is linked while messaging.
+    // The Home page target is remembered and restored on disconnect or when voice is re-linked.
     property bool smsStandbyActive: false
     property string smsStandbyRestoreTg: ""
     property bool smsStandbyRestorePc: false
@@ -290,7 +400,8 @@ ApplicationWindow {
             if (preferredHost && preferredHost !== "") {
                 window.setHost(preferredHost)
             }
-            // Connecting from Messages never links the Home page's voice talkgroup; a group
+            // Connecting from Messages never links the Home page's voice talkgroup; a group thread
+            // links only that thread's talkgroup so its group SMS can be received.
             var numTarget = parseInt(targetId || "0") || 0
             window._rememberHomeTarget()
             if (isGroup && numTarget > 0) {
@@ -314,7 +425,7 @@ ApplicationWindow {
         })
     }
 
-    // App state model - renamed from "state" to "appState" to avoid
+    // App state model - renamed from "state" to "appState" to avoid QML reserved property conflict
     QtObject {
         id: appState
         property string mode: "DMR"
@@ -438,6 +549,17 @@ ApplicationWindow {
         property bool disableSelfLog: true  // Default to disabled (exclude self logging)
         property int qsoLogLimit: 250
 
+        // QSO Replay state (mirrored from replayEngine)
+        property bool replayEnabled: true
+        property bool replayRecordTx: false
+        property int replayStorageMb: 100
+        property int replayMaxOverSeconds: 600
+        property var replayUsedBytes: 0
+        property int replayCount: 0
+        property bool replayRecording: false
+        property string replayLastError: ""
+        property int replayBytesPerSecond: 3090
+
         // Live RX transcription state
         property bool transcriptionEnabled: false
         property bool transcriptionLogEnabled: true
@@ -484,6 +606,8 @@ ApplicationWindow {
     }
 
     // IMPORTANT: expose the QtObject `id` through a window property.
+    // Otherwise, writing `appState: appState` inside child components self-references their required
+    // `appState` property and creates a binding loop.
     readonly property var appStateObj: appState
 
     // Bounded app log model
@@ -498,7 +622,9 @@ ApplicationWindow {
         if (appLogModel.count > 1200) appLogModel.remove(0, appLogModel.count - 1200)
     }
 
+    // ─────────────────────────────────────────────────────────
     // QSO LOG HELPERS (Last Heard + self-filter + limit)
+    // ─────────────────────────────────────────────────────────
     function _fmtLastHeard(entry) {
         if (!entry) return ""
         var parts = []
@@ -524,7 +650,17 @@ ApplicationWindow {
                 var textLine = _fmtLastHeard(e)
                 var dmrVal = parseInt(e.dmrID || "0") || 0
                 if (textLine === "" && dmrVal <= 0) continue
+                // Newest QSO Replay clip of this entry (clips are appended, so the last one is newest)
+                var clips = (e.replayClips && e.replayClips.length !== undefined) ? e.replayClips : []
+                var lastClip = null
+                for (var c = clips.length - 1; c >= 0; c--) {
+                    if (clips[c] && clips[c].id) { lastClip = clips[c]; break }
+                }
                 structured.push({
+                    latestClipId: lastClip ? String(lastClip.id) : "",
+                    latestClipTime: lastClip ? String(lastClip.time || "") : "",
+                    latestClipKind: (lastClip && lastClip.kind === "tx") ? "tx" : "rx",
+                    clipCount: clips.length,
                     callsign: String(e.callsign || ""),
                     dmrID: dmrVal,
                     fname: String(e.fname || ""),
@@ -582,6 +718,8 @@ ApplicationWindow {
         if (!replaced) {
             turns.push(turnObj)
         }
+        // A station that talks all day would otherwise grow one log entry without bound.
+        if (turns.length > 50) turns = turns.slice(turns.length - 50)
 
         entry.transcriptTurns = turns
         var summaryLines = []
@@ -640,8 +778,213 @@ ApplicationWindow {
         _setLastHeardFromArray(saved)
     }
 
+    // ─────────────────────────────────────────────────────────
+    // QSO REPLAY
+    // ─────────────────────────────────────────────────────────
+    function _syncReplayState() {
+        var e = window.replayEngineRef
+        if (!e) return
+        appState.replayEnabled = !!e.enabled
+        appState.replayRecordTx = !!e.recordTx
+        appState.replayStorageMb = e.storageBudgetMb || 100
+        appState.replayMaxOverSeconds = e.maxOverSeconds || 600
+        appState.replayUsedBytes = e.storageUsedBytes || 0
+        appState.replayCount = e.recordingCount || 0
+        appState.replayRecording = !!e.recording
+        appState.replayLastError = e.lastError || ""
+        appState.replayBytesPerSecond = e.bytesPerSecond || 3090
+    }
+
+    function setReplayEnabled(on) {
+        if (!window.replayEngineRef) return
+        window.replayEngineRef.enabled = !!on
+        window._syncReplayState()
+    }
+
+    function setReplayRecordTx(on) {
+        if (!window.replayEngineRef) return
+        window.replayEngineRef.recordTx = !!on
+        window._syncReplayState()
+    }
+
+    function setReplayStorageMb(mb) {
+        if (!window.replayEngineRef) return
+        var n = parseInt(mb)
+        if (isNaN(n) || n <= 0) n = 100
+        window.replayEngineRef.storageBudgetMb = Math.max(50, Math.min(2000, n))
+        window._syncReplayState()
+    }
+
+    function clearAllReplays() {
+        if (!window.replayEngineRef) return
+        if (window.replayPlayerRef) window.replayPlayerRef.stop()
+        window.replayEngineRef.clearAll()
+    }
+
+    // "≈ 9 h" / "≈ 45 min" of overs that fit in mb megabytes at the current codec rate
+    function replayHoursText(mb) {
+        if (!window.replayEngineRef) return ""
+        var h = window.replayEngineRef.hoursForMegabytes(parseInt(mb) || 0)
+        if (h <= 0) return ""
+        if (h < 1) return qsTr("≈ %1 min").arg(Math.max(1, Math.round(h * 60)))
+        if (h < 10) return qsTr("≈ %1 h").arg((Math.round(h * 10) / 10).toString())
+        return qsTr("≈ %1 h").arg(Math.round(h))
+    }
+
+    function formatReplayBytes(bytes) {
+        var b = Number(bytes) || 0
+        if (b < 1024 * 1024) return qsTr("%1 KB").arg(Math.round(b / 1024))
+        if (b < 1024 * 1024 * 1024) return qsTr("%1 MB").arg((Math.round(b / 1048576 * 10) / 10).toString())
+        return qsTr("%1 GB").arg((Math.round(b / 1073741824 * 100) / 100).toString())
+    }
+
+    function replayDurationText(ms) {
+        var s = Math.max(0, Math.round((Number(ms) || 0) / 1000))
+        var m = Math.floor(s / 60)
+        var r = s % 60
+        return m + ":" + (r < 10 ? "0" : "") + r
+    }
+
+    // Live audio always wins over a replay. reason: "live" | "tx"
+    function _pauseReplayFor(reason) {
+        if (window.replayPlayerRef && window.replayPlayerRef.playing) window.replayPlayerRef.pauseForLive(reason)
+    }
+
+    function _parseLogTimeMs(str) {
+        // "yyyy-MM-dd HH:mm:ss" (local time) -> ms since epoch, or 0
+        if (!str || String(str).length < 19) return 0
+        var s = String(str)
+        var d = new Date(parseInt(s.substring(0, 4)), parseInt(s.substring(5, 7)) - 1, parseInt(s.substring(8, 10)),
+                         parseInt(s.substring(11, 13)), parseInt(s.substring(14, 16)), parseInt(s.substring(17, 19)))
+        var ms = d.getTime()
+        return isNaN(ms) ? 0 : ms
+    }
+
+    function _appendClipToLogEntry(entry, clip) {
+        if (!entry || !clip || !clip.id) return []
+        var clips = []
+        if (entry.replayClips && entry.replayClips.length !== undefined) {
+            for (var i = 0; i < entry.replayClips.length; i++) {
+                if (entry.replayClips[i] && entry.replayClips[i].id !== clip.id) clips.push(entry.replayClips[i])
+            }
+        }
+        clips.push(clip)
+        // A station that talks all day would otherwise pin unbounded audio to one entry.
+        var dropped = []
+        while (clips.length > 20) dropped.push(clips.shift().id)
+        entry.replayClips = clips
+        return dropped
+    }
+
+    // A finished clip from the engine: attach it to the station's entry (same top-10 match as
+    // transcripts, within 15 min) or create the entry. Own TX creates an entry under our callsign.
+    function _attachReplayClip(id, kind, mode, srcId, callsign, tgid, startTime, durationMs, bytes, truncated) {
+        if (!window.logHandlerRef || !id) return
+        var isTx = (parseInt(kind) === 1)
+        var clip = {
+            id: id,
+            kind: isTx ? "tx" : "rx",
+            mode: mode || "",
+            time: startTime || Qt.formatDateTime(new Date(), "yyyy-MM-dd HH:mm:ss"),
+            durationMs: parseInt(durationMs) || 0,
+            bytes: Number(bytes) || 0,
+            truncated: !!truncated
+        }
+        var baseCall = window._extractBaseCallsign(callsign)
+        var isNumericCall = /^[0-9]+$/.test(baseCall)
+        var cleanCall = isNumericCall ? "" : baseCall
+        var dmrId = parseInt(srcId || "0")
+        if (isNaN(dmrId) || dmrId < 0) dmrId = 0
+        if (dmrId === 0 && isNumericCall) dmrId = parseInt(baseCall)
+        var tg = parseInt(tgid || "0") || 0
+
+        if (isTx) {
+            if (appState.disableSelfLog) return
+            cleanCall = window._normCallsign(appState.callsign) || cleanCall
+            dmrId = window._selfDmrId() || dmrId
+        } else if (appState.disableSelfLog && window._isSelfContact(dmrId, cleanCall)) {
+            return
+        }
+        if (dmrId <= 0 && cleanCall === "") return   // no identity: the engine reconciles it away
+
+        var current = window.logHandlerRef.loadLog("logs.json")
+        if (!current || current.length === undefined) current = []
+
+        var clipMs = window._parseLogTimeMs(clip.time)
+        var matchedIdx = -1
+        var checkCount = Math.min(current.length, 10)
+        for (var i = 0; i < checkCount; i++) {
+            var row = current[i]
+            var rowDmr = parseInt(row.dmrID || "0")
+            var rowCall = window._extractBaseCallsign(row.callsign)
+            var same = (dmrId > 0 && rowDmr > 0 && rowDmr === dmrId) ||
+                       (cleanCall !== "" && rowCall !== "" && rowCall === cleanCall)
+            if (!same) continue
+            var rowMs = window._parseLogTimeMs(row.currentTime)
+            if (clipMs > 0 && rowMs > 0 && Math.abs(clipMs - rowMs) > 15 * 60 * 1000) continue
+            matchedIdx = i
+            break
+        }
+
+        var dropped = []
+        if (matchedIdx >= 0) {
+            dropped = window._appendClipToLogEntry(current[matchedIdx], clip)
+        } else {
+            var nextSerial = 0
+            for (var k = 0; k < current.length; k++) {
+                var sn = current[k].serialNumber
+                if (sn !== undefined && sn !== null) nextSerial = Math.max(nextSerial, sn + 1)
+            }
+            var sameAsPending = (!isTx && dmrId > 0 && dmrId === window._pendingLogDmr)
+            var newEntry = {
+                serialNumber: nextSerial,
+                callsign: cleanCall !== "" ? cleanCall : (dmrId > 0 ? String(dmrId) : ""),
+                dmrID: dmrId,
+                tgid: tg,
+                country: sameAsPending ? (appState.fetchedCountry || "") : "",
+                fname: sameAsPending ? (appState.fetchedFirstName || "") : "",
+                mode: clip.mode,
+                currentTime: clip.time,
+                transcript: "",
+                transcriptTurns: [],
+                replayClips: [],
+                checked: false
+            }
+            window._appendClipToLogEntry(newEntry, clip)
+            current.unshift(newEntry)
+            var lim = window._effectiveQsoLogLimit()
+            while (current.length > lim) current.pop()
+            window._setLastHeardFromArray(current)
+        }
+        window.logHandlerRef.saveLogAsync("logs.json", current)
+        if (dropped.length > 0 && window.replayEngineRef) window.replayEngineRef.deleteRecordings(dropped)
+    }
+
+    // Clips pruned by budget / reconcile / delete: strip the references and save once.
+    function _stripReplayClips(ids) {
+        if (!window.logHandlerRef || !ids || ids.length === 0) return
+        var gone = {}
+        for (var i = 0; i < ids.length; i++) gone[ids[i]] = true
+        var current = window.logHandlerRef.loadLog("logs.json")
+        if (!current || current.length === undefined) return
+        var changed = false
+        for (var j = 0; j < current.length; j++) {
+            var e = current[j]
+            if (!e.replayClips || e.replayClips.length === undefined || e.replayClips.length === 0) continue
+            var kept = []
+            for (var k = 0; k < e.replayClips.length; k++) {
+                if (e.replayClips[k] && !gone[e.replayClips[k].id]) kept.push(e.replayClips[k])
+            }
+            if (kept.length !== e.replayClips.length) { e.replayClips = kept; changed = true }
+        }
+        if (changed) window.logHandlerRef.saveLogAsync("logs.json", current)
+    }
+
+    // ─────────────────────────────────────────────────────────
     // BACKEND SYNC
+    // ─────────────────────────────────────────────────────────
     // Every backend setter calls save_settings(), which emits update_settings. While we push
+    // many values at once (connect), suppress the echo and sync once afterwards.
     property bool _bulkPush: false
 
     function syncSettingsFromBackend() {
@@ -778,7 +1121,7 @@ ApplicationWindow {
         if (!droidstar) return
 
         window.initializing = true
-        // CC state comes from TranscriptionEngine's own saved settings; sync it before
+        // CC state comes from TranscriptionEngine's own saved settings; sync it before anything below can throw
         window._syncTranscriptionState()
         try {
             // Clean up any orphan Live Activities from previous app runs
@@ -809,8 +1152,11 @@ ApplicationWindow {
             appState.disableSelfLog = !!uiSettings.disableSelfLog
             appState.qsoLogLimit = window._clampQsoLogLimit(uiSettings.qsoLogLimit)
             uiSettings.qsoLogLimit = appState.qsoLogLimit
+            if (window.replayEngineRef) window.replayEngineRef.selfLoggingAllowed = !appState.disableSelfLog
+            if (window.replayPlayerRef) window.replayPlayerRef.volume = Math.max(0, Math.min(1, appState.spkVolume))
+            window._syncReplayState()
 
-            // Load persisted runtime controls (TX audio settings are synced from backend
+            // Load persisted runtime controls (TX audio settings are synced from backend via syncSettingsFromBackend)
             appState.micGain = Math.max(0, Math.min(1, controlSettings.micGain))
             appState.spkVolume = Math.max(0, Math.min(1, controlSettings.spkVolume))
             appState.agc = true
@@ -825,6 +1171,7 @@ ApplicationWindow {
             appState.ttsVoice = controlSettings.ttsVoice || "Mic"
 
             // TranscriptionEngine persists its own state in QSettings("dudetronics", "droidstar");
+            // sync appState from TranscriptionEngine so user's enable/disable choice is preserved across launches.
             if (window.transcriptionEngineRef) {
                 window.transcriptionEngineRef.setUserCallsign(appState.callsign)
                 window._syncTranscriptionState()
@@ -838,7 +1185,7 @@ ApplicationWindow {
 
             // Populate "Last Heard" on app load
             syncLastHeardFromLogFile()
-            // Ensure logs.json exists (prevents first-run "file not found" and enables realtime
+            // Ensure logs.json exists (prevents first-run "file not found" and enables realtime updates)
             if (window.logHandlerRef) {
                 var existingLog = window.logHandlerRef.loadLog("logs.json")
                 window.logHandlerRef.saveLogAsync("logs.json", existingLog)
@@ -863,7 +1210,9 @@ ApplicationWindow {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // ACTIONS (shared by every page so behaviour is identical everywhere)
+    // ─────────────────────────────────────────────────────────
     function flushPendingEdits() {
         Qt.inputMethod.commit()
         // Focus-out makes any focused FormField commit synchronously.
@@ -992,7 +1341,7 @@ ApplicationWindow {
         droidstar.process_connect()
     }
 
-    // Backend creates a fresh Mode object on every connect, so runtime-only
+    // Backend creates a fresh Mode object on every connect, so runtime-only state must be re-sent.
     function applyRuntimeState() {
         if (!droidstar || !appState.connected) return
         droidstar.set_input_volume(appState.micGain)
@@ -1232,7 +1581,7 @@ ApplicationWindow {
 
         window.navigate("main")
 
-        // Smart One-Tap Tune: if already connected to the same mode & host,
+        // Smart One-Tap Tune: if already connected to the same mode & host, switch TG/Module live without disconnecting!
         if (appState.connected &&
             (targetMode === "" || targetMode === appState.mode) &&
             (targetHost === "" || targetHost === appState.selectedHost || targetHost === appState.host)) {
@@ -1249,7 +1598,7 @@ ApplicationWindow {
             return
         }
 
-        // If currently connected to a different mode/host, disconnect first, then apply
+        // If currently connected to a different mode/host, disconnect first, then apply and connect
         var wasBusy = (appState.connected || appState.connecting)
         if (wasBusy) {
             if (appState.txActive) window.txSet(false)
@@ -1463,7 +1812,7 @@ ApplicationWindow {
         var shouldRun = (window.currentPage === "scan") ||
                         appState.favScanActive ||
                         appState.allScanActive ||
-                        (window.currentPage === "main" && appState.mode === "DMR" &&
+                        (window._pageSlot === "main" && appState.mode === "DMR" &&
                          appState.favouriteTgids && appState.favouriteTgids.length > 0)
         droidstar.setHoselineActive(shouldRun)
     }
@@ -1585,6 +1934,8 @@ ApplicationWindow {
             appState.hoselineFavCalls = droidstar.getActiveFavouriteCalls()
         }
         // Closed-loop verification: if our currently tuned BrandMeister talkgroup is live on air
+        // on Hoseline, but local RX hasn't started yet after initial link, re-link once
+        // (BrandMeister Homebrew only; ODTP subscribes via REWIND_TYPE_SUBSCRIPTION, and Hoseline is BM-only).
         var odtpOn = (typeof droidstar.is_odtp_active === "function" && droidstar.is_odtp_active())
         var tgifOn = (typeof droidstar.is_tgif_host === "function" && droidstar.is_tgif_host())
         var isBmHost = String(appState.selectedHost || "").toUpperCase().indexOf("BM") === 0 ||
@@ -1648,6 +1999,7 @@ ApplicationWindow {
         if (!droidstar) return
         if (on && !appState.txEnabled) return
         if (on) _syncDmrTargetBeforeTx()
+        if (on) _pauseReplayFor("tx")
         appState.txActive = on
         droidstar.click_tx(on)
     }
@@ -1658,6 +2010,7 @@ ApplicationWindow {
     function txPress() {
         if (!droidstar || !appState.txEnabled || appState.toggleTx) return
         _syncDmrTargetBeforeTx()
+        _pauseReplayFor("tx")
         appState.txActive = true
         droidstar.press_tx()
     }
@@ -1684,8 +2037,10 @@ ApplicationWindow {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // BACKEND -> UI
-    // If QSO log is saved/cleared from anywhere, keep Last Heard in
+    // ─────────────────────────────────────────────────────────
+    // If QSO log is saved/cleared from anywhere, keep Last Heard in sync (no navigation required).
     Connections {
         target: window.logHandlerRef
         enabled: window.logHandlerRef !== null
@@ -1752,6 +2107,8 @@ ApplicationWindow {
             if (typeof droidstar.is_odtp_active === "function")
                 appState.odtpActive = !!droidstar.is_odtp_active()
 
+            if (!hadRx && appState.data1 !== "" && !appState.txActive) window._pauseReplayFor("live")
+
             if (appState.connected && !appState.txActive && appState.data1 !== "") {
                 window._lastRxEndMs = Date.now()
                 window._heardCurrentTg = true
@@ -1778,7 +2135,8 @@ ApplicationWindow {
                 window._pendingLogKey = key
                 if (window.vuidUpdaterRef) window.vuidUpdaterRef.fetchFirstNameFromAPI(dmr)
             }
-            // When RX goes idle (DMR EOT clears data2), clear the fetched display
+            // When RX goes idle (DMR EOT clears data2), clear the fetched display values
+            // and reset the key so the next RX re-fetches even if the same handle speaks again.
             if (!(dmr > 0)) {
                 appState.fetchedFirstName = ""
                 appState.fetchedCountry = ""
@@ -1823,6 +2181,8 @@ ApplicationWindow {
         function onCaptureDevicesChanged() { window.refreshAudioDevices() }
 
         function onConnect_status_changed(c) {
+            if (c === 1 && appState.ipv6 && appState.mode !== "M17") ipv6Watch.restart()
+            else if (c !== 1) ipv6Watch.stop()
             appState.connectStatus = c
             appState.connecting = (c === 1)
             appState.connected = (c === 2)
@@ -1833,6 +2193,7 @@ ApplicationWindow {
             if (c !== 2) {
                 // Never show TX or live RX transcription as active unless fully connected
                 appState.txActive = false
+                if (window.pttButtonsRef) window.pttButtonsRef.resetAll()
                 appState.currentTranscript = ""
                 appState.transcriptCallsign = ""
                 appState.transcriptActiveTurn = false
@@ -1873,7 +2234,15 @@ ApplicationWindow {
                 // Backend emits in_audio_vol_changed(0.5) right after this signal; apply ours after it.
                 Qt.callLater(window.applyRuntimeState)
             }
-            if (c === 5) {
+            var authNet = (c === 5 && typeof droidstar.get_auth_failed_network === "function")
+                          ? String(droidstar.get_auth_failed_network()) : ""
+            if (authNet !== "") {
+                window._setAuthStatus(authNet, "rejected")
+                var ck = Object.assign({}, window._authCheckedKey)
+                ck[authNet] = window._authKey(authNet)
+                window._authCheckedKey = ck
+                window.showAuthSheet([authNet])
+            } else if (c === 5) {
                 errorDialog.text = droidstar.get_error_text()
                 if (errorDialog.text === "") errorDialog.text = qsTr("Connection refused.")
                 errorDialog.open()
@@ -1898,14 +2267,53 @@ ApplicationWindow {
         function onUsrtxt_changed(s) { appState.usrtxt = String(s) }
     }
 
+    // Hardware PTT buttons: the manager turns raw button events into edges; QML applies TX so
+    // every source respects the connected state and the toggle/hold setting.
+    Binding {
+        target: window.pttButtonsRef
+        property: "holdToTalkMode"
+        value: !appState.toggleTx
+        when: window.pttButtonsRef !== null
+    }
+    Connections {
+        target: window.pttButtonsRef
+        enabled: window.pttButtonsRef !== null
+        function onHoldActiveChanged(active) {
+            if (active || appState.txActive) window.txSet(active)
+        }
+        function onClicked(id) { window.txToggle() }
+        function onStopRequested() { if (appState.txActive) window.txSet(false) }
+        function onSafetyReleased(reason) { window.notify(reason, "", null, "warning") }
+        function onDeviceAdded(id, name) {
+            window.notify(qsTr("%1 added as a PTT button").arg(name), "", null, "success")
+        }
+        function onSuggestToggleTxMode(id, name) {
+            if (appState.toggleTx) return
+            if (appState.txActive) window.txRelease()
+            appState.toggleTx = true
+            if (droidstar) droidstar.set_toggletx(true)
+            window.notify(qsTr("%1 is a click-only button, so Toggle TX mode was turned on").arg(name),
+                          qsTr("Revert"),
+                          function() {
+                              if (appState.txActive) window.txSet(false)
+                              appState.toggleTx = false
+                              if (droidstar) droidstar.set_toggletx(false)
+                              if (window.pttButtonsRef) window.pttButtonsRef.recordAutoSwitchDecision(id, false)
+                              window.notify(qsTr("Hold-to-talk restored. The button still works as a toggle."), "", null, "info")
+                          }, "info")
+        }
+    }
+
     // App lifecycle
     Connections {
         target: Qt.application
         function onStateChanged() {
             if (Qt.application.state === Qt.ApplicationActive) {
                 safeAreaTimer.restart()
-            } else if (!appState.toggleTx && appState.txActive) {
-                // A held PTT can't be released once we lose the touch; don't leave TX keyed.
+            } else if (!appState.toggleTx && appState.txActive
+                       && !(window.pttButtonsRef && window.pttButtonsRef.holdActive)) {
+                // A held on-screen PTT can't be released once we lose the touch; don't leave TX keyed.
+                // A Bluetooth button hold keeps working with the screen off, so it is left alone.
                 window.txRelease()
             }
             if (Qt.application.state === Qt.ApplicationClosing && droidstar) {
@@ -1958,7 +2366,7 @@ ApplicationWindow {
             if (current.length > 0) {
                 var top = current[0]
                 if ((top.dmrID || 0) === dmrId && (top.tgid || 0) === window._pendingLogTgid) {
-                    // Enrich top entry if it was created early by live transcription
+                    // Enrich top entry if it was created early by live transcription before radioid.net replied
                     var updated = false
                     if (callsign && (!top.callsign || top.callsign === String(dmrId))) { top.callsign = callsign; updated = true }
                     if (name && !top.fname) { top.fname = name; updated = true }
@@ -2063,7 +2471,7 @@ ApplicationWindow {
             if (matchedIdx >= 0) {
                 window._appendTurnToLogEntry(current[matchedIdx], turnObj)
             } else if (dmrId > 0 || cleanCall !== "") {
-                // Create the QSO entry for this station so the transcript is
+                // Create the QSO entry for this station so the transcript is never mapped to a different handle
                 var nextSerial = 0
                 for (var k = 0; k < current.length; k++) {
                     var sn = current[k].serialNumber
@@ -2094,6 +2502,33 @@ ApplicationWindow {
         }
     }
 
+    // QsoReplayEngine -> UI state & QSO log attachment
+    Connections {
+        target: window.replayEngineRef
+        enabled: window.replayEngineRef !== null
+
+        function onReplayEnabledChanged() { window._syncReplayState() }
+        function onRecordTxChanged() { window._syncReplayState() }
+        function onStorageBudgetMbChanged() { window._syncReplayState() }
+        function onMaxOverSecondsChanged() { window._syncReplayState() }
+        function onStorageChanged() { window._syncReplayState() }
+        function onRecordingChanged() { window._syncReplayState() }
+        function onLastErrorChanged() { window._syncReplayState() }
+        function onOverRecorded(id, kind, mode, srcId, callsign, tgid, startTime, durationMs, bytes, truncated) {
+            window._attachReplayClip(id, kind, mode, srcId, callsign, tgid, startTime, durationMs, bytes, truncated)
+        }
+        function onRecordingsRemoved(ids) { window._stripReplayClips(ids) }
+        function onRecordingFailed(reason) {
+            window.notify(qsTr("QSO Replay: %1").arg(reason), "", null, "warning")
+        }
+    }
+
+    Connections {
+        target: window.replayPlayerRef
+        enabled: window.replayPlayerRef !== null
+        function onError(reason) { window.notify(reason, "", null, "warning") }
+    }
+
     // NetReminderManager -> Notification tap deep-link
     Connections {
         target: window.netReminderManagerRef
@@ -2114,7 +2549,10 @@ ApplicationWindow {
     // Persist UI settings when changed + enforce log trimming immediately.
     Connections {
         target: appState
-        function onDisableSelfLogChanged() { uiSettings.disableSelfLog = !!appState.disableSelfLog }
+        function onDisableSelfLogChanged() {
+            uiSettings.disableSelfLog = !!appState.disableSelfLog
+            if (window.replayEngineRef) window.replayEngineRef.selfLoggingAllowed = !appState.disableSelfLog
+        }
         function onQsoLogLimitChanged() {
             var clamped = window._clampQsoLogLimit(appState.qsoLogLimit)
             if (clamped !== appState.qsoLogLimit) appState.qsoLogLimit = clamped
@@ -2122,7 +2560,10 @@ ApplicationWindow {
             if (window.initialized) window._trimAndPersistQsoLogIfNeeded()
         }
         function onMicGainChanged() { controlSettings.micGain = appState.micGain }
-        function onSpkVolumeChanged() { controlSettings.spkVolume = appState.spkVolume }
+        function onSpkVolumeChanged() {
+            controlSettings.spkVolume = appState.spkVolume
+            if (window.replayPlayerRef) window.replayPlayerRef.volume = Math.max(0, Math.min(1, appState.spkVolume))
+        }
         function onSpkPreampDbChanged() { controlSettings.spkPreampDb = appState.spkPreampDb }
         function onAgcChanged() { controlSettings.agc = appState.agc }
         function onDmrSlotChanged() { controlSettings.dmrSlot = appState.dmrSlot }
@@ -2189,7 +2630,7 @@ ApplicationWindow {
         window.liveActivityRef.startOrUpdate(mode, callsign, handle, country, tgid)
     }
 
-    // Update live activity from app state changes (using CFRunLoop-backed Timer so background
+    // Update live activity from app state changes (using CFRunLoop-backed Timer so background updates fire reliably)
     Connections {
         target: appState
         function onConnectedChanged() { window.updateDynamicIsland() }
@@ -2201,7 +2642,9 @@ ApplicationWindow {
         function onFetchedCountryChanged() { window.scheduleDynamicIslandUpdate() }
     }
 
+    // ─────────────────────────────────────────────────────────
     // NAVIGATION DRAWER (modal on phones, docked sidebar on wide screens)
+    // ─────────────────────────────────────────────────────────
     Drawer {
         id: navDrawer
         y: window.navDocked ? topBar.height : 0
@@ -2244,7 +2687,7 @@ ApplicationWindow {
                 id: drawerColumn
                 width: drawerFlick.width
                 height: Math.max(drawerFlick.height, implicitHeight)
-                // Nav rows carry their own padding; tighter gaps keep the whole
+                // Nav rows carry their own padding; tighter gaps keep the whole menu visible on shorter screens
                 readonly property bool compactMenu: window.height < 900
                 spacing: compactMenu ? 4 : 8
 
@@ -2380,7 +2823,9 @@ ApplicationWindow {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // TOP BAR
+    // ─────────────────────────────────────────────────────────
     header: ToolBar {
         id: topBar
         Material.elevation: 0
@@ -2415,6 +2860,7 @@ ApplicationWindow {
             Item { visible: window.navDocked; Layout.preferredWidth: 14 }
 
             Label {
+                visible: !homeModeSwitch.visible || window.width >= 400
                 text: (window.currentPageItem && window.currentPageItem.title) ? window.currentPageItem.title : qsTr("DroidStar")
                 Layout.fillWidth: true
                 Layout.minimumWidth: 40
@@ -2422,6 +2868,65 @@ ApplicationWindow {
                 font.bold: true
                 color: t.text
                 elide: Text.ElideRight
+            }
+
+            Item { visible: homeModeSwitch.visible && window.width < 400; Layout.fillWidth: true }
+
+            // Simple / Advanced home: one switch, on = Simple
+            Rectangle {
+                id: homeModeSwitch
+                readonly property bool simple: controlSettings.simpleHome
+                visible: window.currentPage === "main"
+                Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: 4
+                implicitWidth: modeRow.implicitWidth + 20
+                implicitHeight: 32
+                radius: 16
+                color: switchMouse.pressed ? t.surface3 : t.surface
+                border.color: t.stroke
+                border.width: 1
+
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: qsTr("Simple home")
+                Accessible.checkable: true
+                Accessible.checked: simple
+                Accessible.onToggleAction: window.setSimpleHome(!simple)
+                Accessible.onPressAction: window.setSimpleHome(!simple)
+
+                Row {
+                    id: modeRow
+                    anchors.centerIn: parent
+                    spacing: 8
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("Simple")
+                        font.pixelSize: 12
+                        font.bold: homeModeSwitch.simple
+                        color: homeModeSwitch.simple ? t.text : t.textMuted
+                    }
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 36; height: 20; radius: 10
+                        color: homeModeSwitch.simple ? t.accentStrong : t.surface3
+                        border.color: homeModeSwitch.simple ? t.accent : t.strokeStrong
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: t.durMed } }
+                        Rectangle {
+                            x: homeModeSwitch.simple ? parent.width - width - 2 : 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 16; height: 16; radius: 8
+                            color: "white"
+                            Behavior on x { NumberAnimation { duration: t.durMed; easing.type: Easing.OutCubic } }
+                        }
+                    }
+                }
+                MouseArea {
+                    id: switchMouse
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: window.setSimpleHome(!homeModeSwitch.simple)
+                }
             }
 
             Loader {
@@ -2440,7 +2945,7 @@ ApplicationWindow {
                                             : appState.connected ? t.success
                                             : appState.connecting ? t.warning
                                             : t.textMuted
-                readonly property bool showLabel: window.width >= 420 || !headerActionsLoader.item
+                readonly property bool showLabel: window.width >= 420 || (!headerActionsLoader.item && !homeModeSwitch.visible)
                 implicitHeight: 28
                 implicitWidth: pillRow.implicitWidth + 18
                 radius: 14
@@ -2462,7 +2967,7 @@ ApplicationWindow {
                         color: statusPill.tone
                         anchors.verticalCenter: parent.verticalCenter
                         SequentialAnimation on opacity {
-                            // Infinite animations keep ticking on a 16 ms timer when the
+                            // Infinite animations keep ticking on a 16 ms timer when the window is hidden; pause in background.
                             running: (appState.connecting || appState.txActive) && Qt.application.state === Qt.ApplicationActive
                             loops: Animation.Infinite
                             alwaysRunToEnd: true
@@ -2502,9 +3007,12 @@ ApplicationWindow {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // PAGES (created on first visit, then kept alive for instant switching)
+    // ─────────────────────────────────────────────────────────
     function _componentFor(key) {
         if (key === "main") return mainPageComponent
+        if (key === "simple") return simplePageComponent
         if (key === "scan") return scanPageComponent
         if (key === "messages") return messagesPageComponent
         if (key === "settings") return settingsPageComponent
@@ -2536,7 +3044,7 @@ ApplicationWindow {
             delegate: Loader {
                 id: pageLoader
                 required property string modelData
-                readonly property bool isCurrent: window.currentPage === modelData
+                readonly property bool isCurrent: window._pageSlot === modelData
 
                 width: pageHost.width
                 height: pageHost.height
@@ -2544,6 +3052,8 @@ ApplicationWindow {
                 asynchronous: !isCurrent
                 visible: isCurrent
                 sourceComponent: window._componentFor(modelData)
+                // Keep a page alive once built so switching back is instant
+                onLoaded: window._markVisited(modelData)
 
                 transform: Translate { id: enterShift }
 
@@ -2558,18 +3068,41 @@ ApplicationWindow {
         }
     }
 
+    // Running red light around the whole window while transmitting (every page incl. Simple Home,
+    // above sheets). Visual only: no input or layout; animation pauses when backgrounded.
+    TxEdgeGlow {
+        id: txEdge
+        parent: Overlay.overlay
+        anchors.fill: parent
+        z: 10000
+        active: appState.txActive
+        animate: Qt.application.state === Qt.ApplicationActive
+        // Follow the rounded display corners on iPhone/iPad (home-indicator devices)
+        radius: (Qt.platform.os === "ios" && safeAreaObj.bottom > 0) ? (Math.min(window.width, window.height) < 600 ? 44 : 18) : 0
+    }
+
+    AuthCheckSheet {
+        id: authSheet
+        statuses: window.authStatus
+        showSettingsButton: window.currentPage !== "settings"
+        onRetryRequested: function(nets) { window.verifyDmrAuth(nets, false) }
+        onSettingsRequested: window.navigate("settings")
+    }
+
     Toast {
         id: toaster
         anchors.fill: parent
         anchors.leftMargin: window.navDocked ? navDrawer.width : safeAreaObj.left
         anchors.rightMargin: safeAreaObj.right
-        // Pages can lift the toast above their own bottom bars (e.g.
+        // Pages can lift the toast above their own bottom bars (e.g. the Messages composer / keyboard)
         bottomOffset: safeAreaObj.bottom + ((window.currentPageItem && window.currentPageItem.toastBottomInset !== undefined)
                                             ? window.currentPageItem.toastBottomInset : 0)
         z: 100
     }
 
+    // ─────────────────────────────────────────────────────────
     // MODERN ANIMATED SPLASH OVERLAY (Full New Logo + RF Pulse & Spectrum)
+    // ─────────────────────────────────────────────────────────
     Rectangle {
         id: splashOverlay
         anchors.fill: parent
@@ -2917,9 +3450,11 @@ ApplicationWindow {
         onTriggered: {
             // UIKit may report zero insets until the first layout pass completes.
             window.refreshSafeArea()
+            // Only Settings is warmed: QSO and Nets build their models on first visit instead of
+            // competing with the first interactive seconds on older devices.
             window._markVisited("settings")
-            window._markVisited("qso")
-            window._markVisited("nets")
+            // Warm the other Home layout so the Simple/Advanced switch is instant
+            window._markVisited(controlSettings.simpleHome ? "main" : "simple")
         }
     }
 
@@ -2933,6 +3468,15 @@ ApplicationWindow {
             appState: window.appStateObj
             vuidUpdaterRef: window.vuidUpdaterRef
             logHandlerRef: window.logHandlerRef
+        }
+    }
+    Component {
+        id: simplePageComponent
+        SimplePage {
+            objectName: "simple"
+            app: window
+            droidstarRef: window.droidstar
+            appState: window.appStateObj
         }
     }
     Component {
@@ -2963,6 +3507,7 @@ ApplicationWindow {
             droidstarRef: window.droidstar
             appState: window.appStateObj
             smsManagerRef: window.smsManagerRef
+            pttButtonsRef: window.pttButtonsRef
         }
     }
     Component {

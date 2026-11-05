@@ -79,7 +79,8 @@ void XRF::process_udp()
 		m_audio->set_output_volume(m_pendingOutVol);
 	}
 
-	// Voice frames can arrive before (or without) the connect ACK, e.g. on a reconnect
+	// Voice frames can arrive before (or without) the connect ACK, e.g. on a reconnect the
+	// reflector still considers us linked; m_rxtimer/m_audio do not exist yet in that case.
 	if (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio) {
 		emit update(m_modeinfo);
 		return;
@@ -107,7 +108,11 @@ void XRF::process_udp()
 			m_modeinfo.stream_state = STREAM_NEW;
 			m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
 
-			if(!m_rxtimer->isActive()){
+			if(!m_tx && !m_rxtimer->isActive()){
+				m_rxcodecq.clear();
+				if(m_mbevocoder && !m_hwrx){
+					m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+				}
 				m_audio->start_playback();
 				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
@@ -145,14 +150,22 @@ void XRF::process_udp()
 		if( (streamid != m_modeinfo.streamid) ){
 			qDebug() << "New data packet received before timeout";
 			m_modeinfo.streamid = streamid;
-			if(!m_rxtimer->isActive()){
+			if(!m_tx && !m_rxtimer->isActive()){
+				m_rxcodecq.clear();
+				if(m_mbevocoder && !m_hwrx){
+					m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+				}
 				m_audio->start_playback();
 				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
 			}
 		}
 		if(!m_tx && ( (m_modeinfo.stream_state == STREAM_LOST) || (m_modeinfo.stream_state == STREAM_END) || (m_modeinfo.stream_state == STREAM_IDLE) )){
-			if(!m_rxtimer->isActive()){
+			if(!m_tx && !m_rxtimer->isActive()){
+				m_rxcodecq.clear();
+				if(m_mbevocoder && !m_hwrx){
+					m_mbevocoder->resetRx();	// start the decoder from the same clean state as the sender's encoder
+				}
 				m_audio->start_playback();
 				rxJitterReset();
 				m_rxtimer->start(m_rxtimerint);
@@ -238,8 +251,11 @@ void XRF::process_udp()
 			sd_seq = 0;
 			m_modeinfo.usertxt = QString(user_data);
 		}
-		for(int i = 0; i < 9; ++i){
-			m_rxcodecq.append(buf.data()[15+i]);
+		// The last D-STAR frame carries the end pattern, not voice; nothing is queued while we transmit.
+		if(!m_tx && !(m_modeinfo.frame_number & 0x40)){
+			for(int i = 0; i < 9; ++i){
+				m_rxcodecq.append(buf.data()[15+i]);
+			}
 		}
 	}
 	emit update(m_modeinfo);
@@ -489,6 +505,7 @@ void XRF::send_frame(uint8_t *ambe)
 
 		m_modeinfo.frame_number = m_txcnt % 21;
 
+		const QByteArray usrtxt = m_txusrtxt.toLocal8Bit().leftJustified(20, ' ', true);
 		switch(txdata.data()[14]){
 		case 0:
 			txdata[24] = 0x55;
@@ -497,43 +514,43 @@ void XRF::send_frame(uint8_t *ambe)
 			break;
 		case 1:
 			txdata[24] = 0x40 ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[0] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[1] ^ 0x93;
+			txdata[25] = usrtxt[0] ^ 0x4f;
+			txdata[26] = usrtxt[1] ^ 0x93;
 			break;
 		case 2:
-			txdata[24] = m_txusrtxt.toLocal8Bit().data()[2] ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[3] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[4] ^ 0x93;
+			txdata[24] = usrtxt[2] ^ 0x70;
+			txdata[25] = usrtxt[3] ^ 0x4f;
+			txdata[26] = usrtxt[4] ^ 0x93;
 			break;
 		case 3:
 			txdata[24] = 0x41 ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[5] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[6] ^ 0x93;
+			txdata[25] = usrtxt[5] ^ 0x4f;
+			txdata[26] = usrtxt[6] ^ 0x93;
 			break;
 		case 4:
-			txdata[24] = m_txusrtxt.toLocal8Bit().data()[7] ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[8] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[9] ^ 0x93;
+			txdata[24] = usrtxt[7] ^ 0x70;
+			txdata[25] = usrtxt[8] ^ 0x4f;
+			txdata[26] = usrtxt[9] ^ 0x93;
 			break;
 		case 5:
 			txdata[24] = 0x42 ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[10] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[11] ^ 0x93;
+			txdata[25] = usrtxt[10] ^ 0x4f;
+			txdata[26] = usrtxt[11] ^ 0x93;
 			break;
 		case 6:
-			txdata[24] = m_txusrtxt.toLocal8Bit().data()[12] ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[13] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[14] ^ 0x93;
+			txdata[24] = usrtxt[12] ^ 0x70;
+			txdata[25] = usrtxt[13] ^ 0x4f;
+			txdata[26] = usrtxt[14] ^ 0x93;
 			break;
 		case 7:
 			txdata[24] = 0x43 ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[15] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[16] ^ 0x93;
+			txdata[25] = usrtxt[15] ^ 0x4f;
+			txdata[26] = usrtxt[16] ^ 0x93;
 			break;
 		case 8:
-			txdata[24] = m_txusrtxt.toLocal8Bit().data()[17] ^ 0x70;
-			txdata[25] = m_txusrtxt.toLocal8Bit().data()[18] ^ 0x4f;
-			txdata[26] = m_txusrtxt.toLocal8Bit().data()[19] ^ 0x93;
+			txdata[24] = usrtxt[17] ^ 0x70;
+			txdata[25] = usrtxt[18] ^ 0x4f;
+			txdata[26] = usrtxt[19] ^ 0x93;
 			break;
 		default:
 			txdata[24] = 0x16;

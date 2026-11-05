@@ -122,7 +122,13 @@ mbe_decodeAmbe2400Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   b0 |= ambe_d[5]<<1;
   b0 |= ambe_d[48];
 
-  // DVSI AMBE-3000 hardware behavior (mbelib-neo): - b0 == 124 (including the
+  // DVSI AMBE-3000 hardware behavior (mbelib-neo):
+  // - b0 == 124 (including the D-STAR null frame 9E 8D 32 88 26 1A 3F 61 E8):
+  //   14-harmonic all-unvoiced silence model (w0 = 2*pi/32, L = 14, Vl = 0),
+  //   with spectral amplitudes decoded and predicted normally.
+  // - b0 == 125 or b0 == 127 (including FF x 9): lost/repeat frame.
+  // - b0 == 126: tone frame if tone index is valid (5..122 or 128..163),
+  //   otherwise lost/repeat frame.
   if (b0 == 125 || b0 == 127)
     {
       return (2);
@@ -153,7 +159,8 @@ mbe_decodeAmbe2400Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
 
   if (b0 == 124)
     {
-      // D-STAR silence / null frame: 14-harmonic all-unvoiced silence model. Preserve prev_mp
+      // D-STAR silence / null frame: 14-harmonic all-unvoiced silence model.
+      // Preserve prev_mp prediction history so encoder and decoder stay 100% in sync.
       cur_mp->w0 = ((float) 2 * (float) M_PI) / (float) 32;
       cur_mp->L = 14;
       for (l = 0; l <= 56; l++)
@@ -308,7 +315,7 @@ mbe_decodeAmbe2400Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   b8 |= ambe_d[35]<<3;
   b8 |= ambe_d[36]<<2;
   b8 |= ambe_d[37]<<1;
-  // b8 |= 0; // least significant bit of hoc3 unused here, and according to
+  //b8 |= 0; // least significant bit of hoc3 unused here, and according to the patent is forced to 0 when not used
 
   // lookup Ji
   Ji[1] = AmbePlusLmprbl[L][0];
@@ -320,7 +327,9 @@ mbe_decodeAmbe2400Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   printf ("b5: %i b6: %i b7: %i b8: %i\n", b5, b6, b7, b8);
 #endif
 
-  // Load Ci,k with the values from the HOC tables there appear to be a
+  // Load Ci,k with the values from the HOC tables
+  // there appear to be a couple typos in eq. 37 so we will just do what makes sense
+  // (3 <= k <= Ji and k<=6)
   for (k = 3; k <= Ji[1]; k++)
     {
       if (k > 6)
@@ -530,7 +539,7 @@ mbe_processAmbe2400Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
   const int c0_uncorrectable = (cur_mp->errorCount4 != 0);
   cur_mp->errorCount4 = 0;
 
-  for (i = 0; i < *errs2; i++)
+  for (i = 0; i < *errs2 && i < 60; i++)
     {
       *err_str = '=';
       err_str++;
@@ -566,7 +575,9 @@ mbe_processAmbe2400Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
       *err_str = (bad == 2) ? 'E' : 'R';
       err_str++;
 
-      // When C0 had 4 errors on a voice frame, DVSI's AMBE-3000 still updates the
+      // When C0 had 4 errors on a voice frame, DVSI's AMBE-3000 still updates
+      // the log2Ml prediction history from the decoded bits while repeating
+      // the previous enhanced model for audio output.
       if (c0_uncorrectable && bad == 0)
         {
           for (int l = 1; l <= cur_mp->L && l <= 56; l++)

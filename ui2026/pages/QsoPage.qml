@@ -39,6 +39,11 @@ Page {
     property int selectedCount: 0
     property var customExportEntries: null
 
+    // QSO Replay: the engine's clip set changes asynchronously; bumping this re-evaluates hasRecording()
+    property int replayRevision: 0
+    readonly property var replayEngine: (app && app.replayEngineRef) ? app.replayEngineRef : null
+    readonly property var replayPlayer: (app && app.replayPlayerRef) ? app.replayPlayerRef : null
+
     // Full Handle Transcript Viewer state
     property string viewerCallsign: ""
     property int viewerDmrId: 0
@@ -95,6 +100,7 @@ Page {
 
     ListModel { id: logModel }
     ListModel { id: viewerTurnsModel }
+    ListModel { id: viewerClipsModel }
 
     function _recount() {
         var n = 0
@@ -148,6 +154,8 @@ Page {
                 var s = saved[j]
                 var turnsArr = (s.transcriptTurns && s.transcriptTurns.length !== undefined) ? s.transcriptTurns : []
                 var turnsCount = turnsArr.length > 0 ? turnsArr.length : ((s.transcript && String(s.transcript).trim() !== "") ? 1 : 0)
+                var clipsArr = (s.replayClips && s.replayClips.length !== undefined) ? s.replayClips : []
+                var latestClip = clipsArr.length > 0 ? clipsArr[clipsArr.length - 1] : null
                 rows.push({
                     serialNumber: s.serialNumber !== undefined ? s.serialNumber : j,
                     callsign: s.callsign || "",
@@ -159,6 +167,9 @@ Page {
                     transcript: s.transcript || "",
                     transcriptTurnsJson: JSON.stringify(turnsArr),
                     turnCount: turnsCount,
+                    replayClipsJson: JSON.stringify(clipsArr),
+                    clipCount: clipsArr.length,
+                    latestClipId: (latestClip && latestClip.id) ? String(latestClip.id) : "",
                     checked: !!keep[s.serialNumber]
                 })
             }
@@ -185,9 +196,11 @@ Page {
 
     function refreshTranscriptViewer() {
         viewerTurnsModel.clear()
+        viewerClipsModel.clear()
         var targetCall = (viewerCallsign || "").trim().toUpperCase()
         var targetDmr = viewerDmrId
         var collected = []
+        var collectedClips = []
 
         for (var i = 0; i < logModel.count; i++) {
             var e = logModel.get(i)
@@ -201,6 +214,17 @@ Page {
                 if (viewerFname === "" && e.fname) viewerFname = e.fname
                 if (viewerCountry === "" && e.country) viewerCountry = e.country
                 if (viewerCallsign === "" && e.callsign) viewerCallsign = e.callsign
+
+                var clips = _parseClipsJson(e.replayClipsJson)
+                for (var c = clips.length - 1; c >= 0; c--) {
+                    collectedClips.push({
+                        clipId: clips[c].id,
+                        clipKind: clips[c].kind,
+                        clipTime: clips[c].time || e.currentTime || "",
+                        clipDurationMs: clips[c].durationMs,
+                        clipTruncated: clips[c].truncated
+                    })
+                }
 
                 var turns = _parseTurnsJson(e.transcriptTurnsJson, e.transcript, e.currentTime, e.tgid)
                 // Append in newest-first order across rows, or chronological within a row
@@ -221,6 +245,7 @@ Page {
             collected[m].turnNumber = total - m
             viewerTurnsModel.append(collected[m])
         }
+        for (var q = 0; q < collectedClips.length; q++) viewerClipsModel.append(collectedClips[q])
     }
 
     function _entriesForHandleViewer() {
@@ -260,6 +285,65 @@ Page {
         logModel.clear()
         page.selectedCount = 0
         page.logHandlerRef.clearLog(page.logFileName)
+    }
+
+    // ── QSO Replay helpers ──
+    function _parseClipsJson(jsonStr) {
+        var out = []
+        if (!jsonStr || jsonStr === "") return out
+        try {
+            var parsed = JSON.parse(jsonStr)
+            if (parsed && parsed.length !== undefined) {
+                for (var i = 0; i < parsed.length; i++) {
+                    if (parsed[i] && parsed[i].id) {
+                        out.push({
+                            id: String(parsed[i].id),
+                            kind: parsed[i].kind === "tx" ? "tx" : "rx",
+                            time: parsed[i].time || "",
+                            durationMs: parseInt(parsed[i].durationMs || "0") || 0,
+                            truncated: !!parsed[i].truncated
+                        })
+                    }
+                }
+            }
+        } catch (e) {}
+        return out
+    }
+
+    function _clipIdsFromJson(jsonStr) {
+        var clips = _parseClipsJson(jsonStr)
+        var ids = []
+        for (var i = 0; i < clips.length; i++) ids.push(clips[i].id)
+        return ids
+    }
+
+    function _shortClipTime(timeStr) {
+        var s = String(timeStr || "")
+        return s.length >= 19 ? s.substring(11, 16) : s
+    }
+
+    function replayLabel(callsign, dmrID, timeStr, kind) {
+        var who = (callsign && callsign !== "") ? callsign : qsTr("ID %1").arg(dmrID || 0)
+        var when = _shortClipTime(timeStr)
+        return (kind === "tx" ? qsTr("My TX") + " · " : "") + who + (when !== "" ? " · " + when : "")
+    }
+
+    function playClip(clipId, callsign, dmrID, timeStr, kind) {
+        if (!page.replayPlayer || !clipId) return
+        page.replayPlayer.play(clipId, replayLabel(callsign, dmrID, timeStr, kind))
+    }
+
+    function playLatestClip(rowObj) {
+        if (!rowObj || !rowObj.latestClipId) return
+        var clips = _parseClipsJson(rowObj.replayClipsJson)
+        var last = clips.length > 0 ? clips[clips.length - 1] : null
+        playClip(rowObj.latestClipId, rowObj.callsign, rowObj.dmrID, last ? last.time : rowObj.currentTime, last ? last.kind : "rx")
+    }
+
+    function deleteClips(ids) {
+        if (!page.replayEngine || !ids || ids.length === 0) return
+        if (page.replayPlayer && ids.indexOf(page.replayPlayer.currentId) >= 0) page.replayPlayer.stop()
+        page.replayEngine.deleteRecordings(ids)
     }
 
     function _entriesForExport() {
@@ -318,14 +402,22 @@ Page {
 
     Component.onCompleted: loadLog()
 
-    // Refresh list whenever logs.json changes (global logger writes it even if
+    // Refresh list whenever logs.json changes (global logger writes it even if QSO page isn't open)
     Connections {
         target: page.logHandlerRef
         function onLogSaved(fileName) { if (fileName === page.logFileName) page.loadLog() }
         function onLogCleared(fileName) { if (fileName === page.logFileName) page.loadLog() }
     }
 
+    Connections {
+        target: page.replayEngine
+        enabled: page.replayEngine !== null
+        function onStorageChanged() { page.replayRevision++ }
+    }
+
+    // ─────────────────────────────────────────────────────────
     // RESPONSIVE HANDLE TRANSCRIPTION VIEWER SHEET
+    // ─────────────────────────────────────────────────────────
     Popup {
         id: transcriptViewerSheet
         parent: Overlay.overlay
@@ -481,6 +573,82 @@ Page {
 
             Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: t.stroke }
 
+            // QSO Replays for this station, newest first (tap to play, long-press to delete)
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: viewerClipsModel.count > 0
+                spacing: 6
+
+                Label {
+                    text: viewerClipsModel.count === 1 ? qsTr("1 replay") : qsTr("%1 replays").arg(viewerClipsModel.count)
+                    font.pixelSize: t.fsCaption
+                    color: t.textMuted
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Repeater {
+                        model: viewerClipsModel
+                        delegate: Rectangle {
+                            id: clipChip
+                            required property string clipId
+                            required property string clipKind
+                            required property string clipTime
+                            required property int clipDurationMs
+                            required property bool clipTruncated
+                            readonly property int rev: page.replayRevision
+                            readonly property bool present: rev >= 0 && page.replayEngine && page.replayEngine.hasRecording(clipId)
+                            readonly property bool isCurrent: !!(page.replayPlayer && page.replayPlayer.currentId === clipId)
+                            readonly property bool isPlayingThis: isCurrent && page.replayPlayer.playing
+
+                            visible: present
+                            radius: 8
+                            implicitHeight: 32
+                            implicitWidth: chipRow.implicitWidth + 20
+                            color: isCurrent ? t.tint(t.accent, 0.22) : (chipMouse.pressed ? t.surface3 : t.tint(t.accent, 0.08))
+                            border.color: isCurrent ? t.accent : t.tint(t.accent, 0.4)
+                            border.width: 1
+                            Accessible.role: Accessible.Button
+                            Accessible.name: qsTr("Replay from %1").arg(clipTime)
+
+                            Row {
+                                id: chipRow
+                                anchors.centerIn: parent
+                                spacing: 6
+                                Label {
+                                    text: clipChip.isPlayingThis ? "\uf04c" : "\uf04b"
+                                    font.family: "FontAwesome"
+                                    font.pixelSize: 11
+                                    color: t.accent
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                                Label {
+                                    text: (clipChip.clipKind === "tx" ? qsTr("TX") + " " : "")
+                                          + page._shortClipTime(clipChip.clipTime) + "  "
+                                          + (page.app ? page.app.replayDurationText(clipChip.clipDurationMs) : "")
+                                          + (clipChip.clipTruncated ? " +" : "")
+                                    font.pixelSize: t.fsSmall
+                                    color: t.text
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            MouseArea {
+                                id: chipMouse
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: page.playClip(clipChip.clipId, page.viewerCallsign, page.viewerDmrId, clipChip.clipTime, clipChip.clipKind)
+                                onPressAndHold: {
+                                    confirmDeleteReplaysDialog.clipIds = [clipChip.clipId]
+                                    confirmDeleteReplaysDialog.open()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Scrollable list of timestamped turns for this handle
             ListView {
                 id: turnsListView
@@ -587,7 +755,9 @@ Page {
         }
     }
 
+    // ─────────────────────────────────────────────────────────
     // DIALOGS
+    // ─────────────────────────────────────────────────────────
     AppDialog {
         id: exportDialog
         maxWidth: 420
@@ -701,6 +871,58 @@ Page {
         }
     }
 
+    AppDialog {
+        id: confirmDeleteReplaysDialog
+        property var clipIds: []
+        maxWidth: 400
+        title: clipIds.length === 1 ? qsTr("Delete this replay?") : qsTr("Delete %1 replays?").arg(clipIds.length)
+        destructiveText: qsTr("Delete")
+        standardButtons: Dialog.Cancel | Dialog.Discard
+
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("The audio is removed from this device. The log entry stays.")
+                wrapMode: Text.WordWrap
+                color: t.text
+            }
+        }
+
+        onDiscarded: {
+            page.deleteClips(clipIds)
+            close()
+            if (page.app) page.app.notify(clipIds.length === 1 ? qsTr("Replay deleted") : qsTr("Replays deleted"), "", null, "success")
+        }
+    }
+
+    AppDialog {
+        id: confirmClearReplaysDialog
+        maxWidth: 400
+        title: qsTr("Clear all replays?")
+        destructiveText: qsTr("Clear replays")
+        standardButtons: Dialog.Cancel | Dialog.Discard
+
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                text: (page.appState && page.app)
+                      ? qsTr("All %1 replays (%2) will be permanently removed from this device. Your QSO log entries stay.")
+                            .arg(page.appState.replayCount).arg(page.app.formatReplayBytes(page.appState.replayUsedBytes))
+                      : ""
+                wrapMode: Text.WordWrap
+                color: t.text
+            }
+        }
+
+        onDiscarded: {
+            if (page.app) page.app.clearAllReplays()
+            close()
+            if (page.app) page.app.notify(qsTr("All replays cleared"), "", null, "success")
+        }
+    }
+
     // Shared row menu (one instance instead of one per delegate)
     Menu {
         id: rowMenu
@@ -718,13 +940,25 @@ Page {
                     page.app.openMessageTo(rowMenu.rowData.dmrID, rowMenu.rowData.callsign, false)
             }
         }
+        MenuItem {
+            text: qsTr("Delete replays")
+            visible: !!(rowMenu.rowData && rowMenu.rowData.replayClipsJson && rowMenu.rowData.replayClipsJson !== "[]")
+            height: visible ? implicitHeight : 0
+            onTriggered: {
+                if (!rowMenu.rowData) return
+                confirmDeleteReplaysDialog.clipIds = page._clipIdsFromJson(rowMenu.rowData.replayClipsJson)
+                confirmDeleteReplaysDialog.open()
+            }
+        }
         MenuSeparator {}
         MenuItem { text: qsTr("Lookup on QRZ"); onTriggered: Qt.openUrlExternally("https://qrz.com/lookup/" + encodeURIComponent(rowMenu.callsign)) }
         MenuItem { text: qsTr("Lookup on Brandmeister"); onTriggered: Qt.openUrlExternally("https://brandmeister.network/index.php?page=profile&call=" + encodeURIComponent(rowMenu.callsign)) }
         MenuItem { text: qsTr("Lookup on APRS.fi"); onTriggered: Qt.openUrlExternally("https://aprs.fi/#!call=a%2F" + encodeURIComponent(rowMenu.callsign)) }
     }
 
+    // ─────────────────────────────────────────────────────────
     // CONTENT
+    // ─────────────────────────────────────────────────────────
     ColumnLayout {
         id: body
         anchors.top: parent.top
@@ -775,6 +1009,52 @@ Page {
                     onToggled: function(on) { if (page.appState) page.appState.disableSelfLog = on }
                 }
 
+                ToggleRow {
+                    text: qsTr("QSO Replay")
+                    description: qsTr("Keeps a replay of every received over with its log entry. Replays stay on this device and are never exported.")
+                    checked: !!(page.appState && page.appState.replayEnabled)
+                    activeColor: t.success
+                    onToggled: function(on) { if (page.app) page.app.setReplayEnabled(on) }
+                }
+
+                ToggleRow {
+                    text: qsTr("Replay my own transmissions")
+                    description: (page.appState && page.appState.disableSelfLog)
+                                 ? qsTr("Turn off \"Exclude my own transmissions\" above to record your TX.")
+                                 : qsTr("Also keeps a replay of each over you transmit, logged under your callsign.")
+                    enabled: !!(page.appState && page.appState.replayEnabled && !page.appState.disableSelfLog)
+                    checked: !!(page.appState && page.appState.replayRecordTx)
+                    activeColor: t.success
+                    onToggled: function(on) { if (page.app) page.app.setReplayRecordTx(on) }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: !!(page.appState && (page.appState.replayEnabled || page.appState.replayCount > 0))
+                    spacing: 10
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        text: (page.appState && page.app)
+                              ? (page.appState.replayCount === 0
+                                 ? qsTr("No replays yet · budget %1 MB (%2)").arg(page.appState.replayStorageMb).arg(page.app.replayHoursText(page.appState.replayStorageMb))
+                                 : qsTr("%1 replays · %2 of %3 MB").arg(page.appState.replayCount)
+                                       .arg(page.app.formatReplayBytes(page.appState.replayUsedBytes)).arg(page.appState.replayStorageMb))
+                              : ""
+                        font.pixelSize: t.fsCaption
+                        color: t.textMuted
+                        wrapMode: Text.WordWrap
+                    }
+                    AppButton {
+                        text: page.roomy ? qsTr("Clear all replays") : qsTr("Clear")
+                        glyph: "\uf1f8"
+                        tone: "danger"
+                        implicitHeight: 36
+                        enabled: !!(page.appState && page.appState.replayCount > 0)
+                        onClicked: confirmClearReplaysDialog.open()
+                    }
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 12
@@ -820,6 +1100,14 @@ Page {
             }
         }
 
+        ReplayPlayerBar {
+            id: replayBar
+            Layout.fillWidth: true
+            Layout.maximumWidth: page.roomy ? 720 : Number.POSITIVE_INFINITY
+            Layout.alignment: Qt.AlignHCenter
+            player: page.replayPlayer
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Label {
@@ -857,6 +1145,9 @@ Page {
                 required property string transcript
                 required property string transcriptTurnsJson
                 required property int turnCount
+                required property string replayClipsJson
+                required property int clipCount
+                required property string latestClipId
                 required property bool checked
 
                 width: ListView.view.width
@@ -879,7 +1170,8 @@ Page {
                         dmrID: row.dmrID,
                         fname: row.fname,
                         country: row.country,
-                        tgid: row.tgid
+                        tgid: row.tgid,
+                        replayClipsJson: row.replayClipsJson
                     })
                 }
 
@@ -894,7 +1186,8 @@ Page {
                             dmrID: row.dmrID,
                             fname: row.fname,
                             country: row.country,
-                            tgid: row.tgid
+                            tgid: row.tgid,
+                            replayClipsJson: row.replayClipsJson
                         }
                         rowMenu.popup()
                     }
@@ -920,7 +1213,9 @@ Page {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         spacing: 4
-                        // Narrow rows (Slide Over, small phones): the TG and transcript pills move
+                        // Narrow rows (Slide Over, small phones): the TG and transcript pills move to their own
+                        // line so the callsign and name keep their full width. Derived from the page width, not
+                        // from this column's own width, so the row layout never feeds back into itself.
                         readonly property bool tight: page.tightRows
 
                         RowLayout {
@@ -977,7 +1272,7 @@ Page {
                                 elide: Text.ElideRight
                             }
 
-                            // Responsive inline "Transcripts" pill button to view full timestamped turns of
+                            // Responsive inline "Transcripts" pill button to view full timestamped turns of this handle
                             Rectangle {
                                 visible: row.transcript !== "" && !rowTextCol.tight
                                 radius: 7
@@ -1025,7 +1320,8 @@ Page {
                             color: t.textMuted
                         }
 
-                        // Tight rows: the TG / transcript pills get their own line (fixed
+                        // Tight rows: the TG / transcript pills get their own line (fixed rows rather than a
+                        // wrapping Flow, which would need a third height-for-width layout pass)
                         RowLayout {
                             Layout.fillWidth: true
                             visible: rowTextCol.tight && (!!row.tgid || row.transcript !== "")
@@ -1119,6 +1415,33 @@ Page {
                         }
                     }
 
+                    // QSO Replay: plays the newest clip of this entry; all clips live in the viewer sheet
+                    RoundIconButton {
+                        id: replayButton
+                        readonly property int rev: page.replayRevision
+                        readonly property bool hasClip: rev >= 0 && row.clipCount > 0 && page.replayEngine &&
+                                                        page.replayEngine.hasRecording(row.latestClipId)
+                        readonly property bool isCurrent: !!(page.replayPlayer && page.replayPlayer.currentId === row.latestClipId)
+                        readonly property bool isPlayingThis: isCurrent && page.replayPlayer.playing
+                        visible: hasClip
+                        Layout.alignment: Qt.AlignVCenter
+                        implicitWidth: page.roomy ? 44 : 38
+                        implicitHeight: page.roomy ? 44 : 38
+                        glyphSize: 14
+                        glyph: isPlayingThis ? "\uf04c" : "\uf04b"
+                        tone: isCurrent ? t.accentStrong : t.accent
+                        filled: isCurrent
+                        badge: row.clipCount > 1 ? row.clipCount : 0
+                        accessibleName: qsTr("Replay %1").arg(row.callsign !== "" ? row.callsign : row.dmrID)
+                        onClicked: page.playLatestClip({
+                            latestClipId: row.latestClipId,
+                            replayClipsJson: row.replayClipsJson,
+                            callsign: row.callsign,
+                            dmrID: row.dmrID,
+                            currentTime: row.currentTime
+                        })
+                    }
+
                     RoundIconButton {
                         readonly property int rowId: parseInt(row.dmrID || "0") || 0
                         readonly property int unread: page.unreadFrom(rowId)
@@ -1149,7 +1472,8 @@ Page {
                                 dmrID: row.dmrID,
                                 fname: row.fname,
                                 country: row.country,
-                                tgid: row.tgid
+                                tgid: row.tgid,
+                                replayClipsJson: row.replayClipsJson
                             }
                             rowMenu.popup(optionsButton, 0, optionsButton.height)
                         }

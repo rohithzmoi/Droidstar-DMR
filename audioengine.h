@@ -46,7 +46,7 @@ public:
     AudioEngine(QString in, QString out);
     ~AudioEngine();
 
-    // Global lock-free audio enhancement controls (apply immediately across all active Mode
+    // Global lock-free audio enhancement controls (apply immediately across all active Mode threads)
     static void setGlobalNoiseMode(int mode);
     static int globalNoiseMode();
     static void setGlobalHdUpscale(bool enabled);
@@ -130,8 +130,16 @@ private:
 
     uint32_t m_lastPlayRouteGen { 0 };
     uint32_t m_lastCapRouteGen { 0 };
+    // Capture liveness: CoreAudio stops calling back after an interruption / media reset while
+    // Qt's source still believes it is running, and its stop()/reset()/destructor then wait forever.
+    qint64 m_lastCaptureCallbackMs = 0;
+    uint32_t m_captureIoGen = 0;           // iOS I/O invalidation generation when capture started
+    bool captureSourceLooksDead() const;
+    void reapCaptureSource();
     bool m_reinitializingSink { false };
     int m_consecutiveWriteFailures { 0 };
+    int m_sinkRebuildCount { 0 };          // back-off for a genuinely dead output
+    qint64 m_lastSinkRebuildMs { 0 };
 
     // Capture resampling state: deviceRate -> 16000 Hz or 8000 Hz (mono)
     qint64 m_capStreamIndex { -1 };

@@ -13,6 +13,9 @@
 #include "TranscriptionEngine.h"
 #include "NetReminderManager.h"
 #include "DmrSmsManager.h"
+#include "pttbuttonmanager.h"
+#include "QsoReplayEngine.h"
+#include "QsoReplayPlayer.h"
 
 
 
@@ -38,12 +41,28 @@ int main(int argc, char *argv[])
 
     NetReminderManager netReminderManager;
     engine.rootContext()->setContextProperty("netReminderManager", &netReminderManager);
+
+    // QSO Replay engine. Declared before DroidStar so it outlives every Mode/AudioEngine that taps
+    // into it (the capture ring itself is static storage, see QsoReplayCapture.h).
+    QsoReplayEngine replayEngine;
+    engine.rootContext()->setContextProperty("replayEngine", &replayEngine);
     
     // Create an instance of DroidStar
         DroidStar droidStarInstance;
         
         // Expose the DroidStar instance to QML as a context property
         engine.rootContext()->setContextProperty("droidStar", &droidStarInstance);
+
+    // Hardware PTT buttons (headset media button, Bluetooth LE buttons, keyboard-type buttons).
+    // Declared after DroidStar so it is torn down first and its native callbacks are gone
+    // before the audio session and modes go away.
+    PttButtonManager pttButtons;
+    engine.rootContext()->setContextProperty("pttButtons", &pttButtons);
+
+    // QSO Replay playback. Declared after DroidStar (torn down first) so the native player is
+    // released before the audio session goes away.
+    QsoReplayPlayer replayPlayer(&replayEngine);
+    engine.rootContext()->setContextProperty("replayPlayer", &replayPlayer);
     
     // Expose instances to QML
     VUIDUpdater vuidUpdater;
@@ -54,6 +73,8 @@ int main(int argc, char *argv[])
 
     LogHandler logHandler;
     engine.rootContext()->setContextProperty("logHandler", &logHandler);
+    replayEngine.attachLogHandler(&logHandler);
+    replayEngine.start();
 
     // iOS Dynamic Island / Live Activity bridge (no-op on non-iOS)
     LiveActivityQtBridge liveActivity;

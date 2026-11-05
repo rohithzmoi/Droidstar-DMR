@@ -29,10 +29,11 @@ ItemDelegate {
     property string iconText: ""
     property string iconFont: "FontAwesome"
     property string badgeText: ""
+    property bool compact: false
 
     Tokens { id: t }
 
-    implicitHeight: 48
+    implicitHeight: compact ? 42 : 48
     leftPadding: 14
     rightPadding: 12
 
@@ -59,9 +60,11 @@ ItemDelegate {
             font.bold: root.highlighted
             color: root.highlighted ? t.text : Material.foreground
             elide: Text.ElideRight
+            // Shrinks below its natural width before the badge does; no dependency on the row width
+            Layout.fillWidth: true
             Layout.minimumWidth: 0
             Layout.preferredWidth: implicitWidth
-            Layout.maximumWidth: Math.max(40, root.availableWidth - 36 - (badge.visible ? badge.implicitWidth + 10 : 0))
+            Layout.maximumWidth: Math.ceil(implicitWidth) + 1
             Layout.alignment: Qt.AlignVCenter
         }
 

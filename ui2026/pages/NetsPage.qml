@@ -198,6 +198,7 @@ Page {
         editReminders = [30, 5]
         editNotes = ""
         customRemField.text = ""
+        editorFlick.contentY = 0
         editorSheet.open()
     }
 
@@ -233,6 +234,7 @@ Page {
         editReminders = rArr.length > 0 ? rArr : [15]
         editNotes = net.notes || ""
         customRemField.text = ""
+        editorFlick.contentY = 0
         editorSheet.open()
     }
 
@@ -270,15 +272,12 @@ Page {
     // ─────────────────────────────────────────────────────────
     // DELETE CONFIRMATION DIALOG
     // ─────────────────────────────────────────────────────────
-    Dialog {
+    AppDialog {
         id: deleteConfirmDialog
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: Math.min(parent ? parent.width - 32 : 360, 400)
+        maxWidth: 400
         title: qsTr("Delete Net Reminder?")
-        modal: true
+        destructiveText: qsTr("Delete")
         standardButtons: Dialog.Cancel | Dialog.Discard
-        Overlay.modal: Rectangle { color: "#99000000" }
 
         property string targetId: ""
         property string targetName: ""
@@ -325,9 +324,10 @@ Page {
         readonly property real kb: Qt.inputMethod.visible ? Qt.inputMethod.keyboardRectangle.height : 0
 
         width: wideSheet ? Math.min(560, ow - 40) : ow
-        height: Math.min(wideSheet ? 680 : oh * 0.88, oh - kb - safeTop - 16)
+        readonly property real centeredRoom: oh - safeTop - Math.max(kb, safeBottom) - 32
+        height: Math.min(wideSheet ? 680 : oh * 0.88, wideSheet ? centeredRoom : oh - kb - safeTop - 16)
         x: (ow - width) / 2
-        y: wideSheet ? Math.max(safeTop + 16, (oh - kb - height) / 2) : oh - kb - height
+        y: wideSheet ? safeTop + 16 + Math.max(0, (centeredRoom - height) / 2) : oh - kb - height
 
         Overlay.modal: Rectangle { color: "#99000000" }
         background: Rectangle {
@@ -403,8 +403,10 @@ Page {
                             spacing: 8
 
                             SearchableComboSheet {
+                                Layout.fillWidth: true
                                 Layout.preferredWidth: 82
                                 Layout.minimumWidth: 68
+                                Layout.maximumWidth: 82
                                 model: page.hoursModel
                                 currentText: page.editHour
                                 sheetTitle: qsTr("Hour (24h)")
@@ -413,8 +415,10 @@ Page {
                             }
                             Label { text: ":"; font.pixelSize: 18; font.bold: true; color: t.text }
                             SearchableComboSheet {
+                                Layout.fillWidth: true
                                 Layout.preferredWidth: 82
                                 Layout.minimumWidth: 68
+                                Layout.maximumWidth: 82
                                 model: page.minutesModel
                                 currentText: page.editMinute
                                 sheetTitle: qsTr("Minute")
@@ -896,24 +900,30 @@ Page {
                         Label {
                             Layout.fillWidth: true
                             Layout.minimumWidth: 40
+                            Layout.preferredWidth: 1
                             text: modelData.name || qsTr("Ham Net")
                             font.pixelSize: 16
                             font.bold: true
                             color: t.text
+                            wrapMode: Text.WordWrap
+                            maximumLineCount: 2
                             elide: Text.ElideRight
                         }
 
                         Rectangle {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: 1
                             radius: 8
                             clip: true
                             color: modelData.enabled ? t.tint(t.success, 0.15) : t.surface3
                             border.color: modelData.enabled ? t.tint(t.success, 0.5) : t.stroke
                             border.width: 1
                             implicitHeight: 22
-                            implicitWidth: cdLabel.implicitWidth + 12
+                            implicitWidth: Math.ceil(cdLabel.implicitWidth) + 12
+                            Layout.fillWidth: true
                             Layout.preferredWidth: implicitWidth
                             Layout.minimumWidth: Math.min(implicitWidth, 76)
-                            Layout.maximumWidth: Math.max(110, cardCol.width * 0.54)
+                            Layout.maximumWidth: Math.min(implicitWidth, Math.max(110, cardCol.width * 0.54))
                             Label {
                                 id: cdLabel
                                 anchors.fill: parent
@@ -931,6 +941,8 @@ Page {
 
                         Switch {
                             id: netEnableSwitch
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: -10
                             Layout.preferredWidth: implicitWidth
                             Layout.minimumWidth: implicitWidth
                             Layout.maximumWidth: implicitWidth
@@ -1051,7 +1063,7 @@ Page {
                                 clip: true
                                 color: t.surface3
                                 implicitHeight: 22
-                                implicitWidth: hostBadge.implicitWidth + 12
+                                implicitWidth: Math.ceil(hostBadge.implicitWidth) + 12
                                 Layout.fillWidth: true
                                 Layout.minimumWidth: 44
                                 Layout.preferredWidth: implicitWidth
@@ -1076,7 +1088,8 @@ Page {
                                 clip: true
                                 color: t.tint(t.warning, 0.16)
                                 implicitHeight: 22
-                                implicitWidth: tgBadge.implicitWidth + 10
+                                implicitWidth: Math.ceil(tgBadge.implicitWidth) + 10
+                                Layout.fillWidth: true
                                 Layout.preferredWidth: implicitWidth
                                 Layout.minimumWidth: Math.min(implicitWidth, 48)
                                 Layout.maximumWidth: Math.min(120, implicitWidth)

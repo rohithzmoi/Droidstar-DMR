@@ -102,7 +102,8 @@ void P25::process_udp()
 		emit update(m_modeinfo);
 	}
 	if(buf.size() > 11){
-		// Voice can only be handled once the 11-byte poll ack created m_rxtimer/m_audio; a stray
+		// Voice can only be handled once the 11-byte poll ack created m_rxtimer/m_audio;
+		// a stray voice frame before that would dereference null pointers.
 		if (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio) {
 			return;
 		}
@@ -143,7 +144,7 @@ void P25::process_udp()
 			break;
 		case 0x66U:
 			m_modeinfo.srcid = (uint32_t)((buf.data()[1] << 16) | ((buf.data()[2] << 8) & 0xff00) | (buf.data()[3] & 0xff));
-			// ui->rptr1->setText(QString::number((uint32_t)((buf.data()[1] << 16) | ((buf.data()[2]
+			//ui->rptr1->setText(QString::number((uint32_t)((buf.data()[1] << 16) | ((buf.data()[2] << 8) & 0xff00) | (buf.data()[3] & 0xff))));
 			offset = 5U;
 			break;
 		case 0x67U:
@@ -181,7 +182,10 @@ void P25::process_udp()
 		//for(int i = 0; i < 11; ++i){
 			//m_codecq.enqueue(buf.data()[i + offset]);
 		//}
-		if (offset + 11 > buf.size()) {
+		// Only frame types 0x62..0x73 carry an IMBE frame; 0x80 (end) and unknown types do not, and
+		// nothing is queued while we transmit.
+		const uint8_t p25ft = (uint8_t)buf.data()[0U];
+		if (m_tx || p25ft < 0x62U || p25ft > 0x73U || offset + 11 > buf.size()) {
 			// Truncated/short datagram: never read IMBE bytes past the end of the packet.
 			emit update(m_modeinfo);
 			return;
@@ -472,7 +476,7 @@ void P25::process_rx_data()
 	uint8_t imbe[11];
 	int16_t pcm[160];
 
-	if(rxJitterReady(11)){
+	if((!m_tx) && rxJitterReady(11)){
 		m_rxConcealRun = 0;
 		for(int i = 0; i < 11; ++i){
 			imbe[i] = m_rxcodecq.dequeue();
@@ -485,7 +489,7 @@ void P25::process_rx_data()
 		emit update_output_level(m_audio->level());
 	}
 	else if((!m_tx) && m_haveLastImbe && rxShouldConceal()){
-		// Late/missing frame: re-synthesise the last IMBE frame (parameter repeat) instead of
+		// Late/missing frame: re-synthesise the last IMBE frame (parameter repeat) instead of starving the sink
 		vocoder.decode_4400(pcm, m_lastImbe);
 		m_audio->write(pcm, 160);
 		emit update_output_level(m_audio->level());

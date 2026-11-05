@@ -95,7 +95,11 @@ Rectangle {
             id: sw
             checked: root.checked
             focusPolicy: Qt.TabFocus
-            onToggled: root.toggled(checked)
+            onToggled: {
+                root.toggled(checked)
+                // A click breaks the binding; restore it so later state changes (e.g. auto IPv6 off) still show.
+                checked = Qt.binding(function() { return root.checked })
+            }
         }
     }
 }

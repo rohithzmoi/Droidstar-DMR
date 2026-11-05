@@ -56,7 +56,20 @@ void imbe_vocoder_impl::encode_init(void)
 	pitch_ref_init();
 }
 
-// Robust coarse-pitch override. The stock IMBE pitch tracker (pitch_est) was measured
+// Robust coarse-pitch override.
+//
+// The stock IMBE pitch tracker (pitch_est) was measured against an independent autocorrelation
+// reference on clean speech: only ~35-40 % of clearly periodic frames came back within +-10 %,
+// with most errors at 4/3 and 2/3 of the true pitch (not octaves). pitch_ref only searches
+// +-1.1 samples around that coarse value, so the error goes straight into the AMBE/IMBE
+// bitstream and the far end hears harmonics at the wrong spacing: buzzy, metallic, dull.
+//
+// This computes a normalized cross-correlation over the same 301-sample window pitch_est uses
+// (pitch-estimation low-passed signal, centred at sample 150) and, when it is confident,
+// replaces the coarse pitch. Candidate selection prefers the shortest lag that is a local
+// maximum within 0.08 of the global maximum (fundamental over sub-harmonics) and then favours
+// continuity with the previous frame. e_p is re-derived from the correlation so v_uv_det's
+// "noisy pitch" rule stays consistent with the new estimate.
 void imbe_vocoder_impl::robust_pitch_override(IMBE_PARAM *imbe_param)
 {
 	constexpr int kMinLag = 20;   // 400 Hz
@@ -93,7 +106,7 @@ void imbe_vocoder_impl::robust_pitch_override(IMBE_PARAM *imbe_param)
 		return;
 	}
 
-	// Shortest local maximum nearly as strong as the global one: the
+	// Shortest local maximum nearly as strong as the global one: the fundamental, not a sub-harmonic.
 	int lag = bestLag;
 	for (int c = kMinLag; c < bestLag; ++c) {
 		const float prev = (c > kMinLag) ? ncc[c - 1] : 0.0f;
@@ -198,7 +211,9 @@ void imbe_vocoder_impl::encode(IMBE_PARAM *imbe_param, Word16 *frame_vector, Wor
 	pitch_est(imbe_param, pitch_est_buf);
 	robust_pitch_override(imbe_param);
 
-    // Speech windowing and FFT calculation
+    //
+	// Speech windowing and FFT calculation
+	//
 	wr_ptr  = (Word16 *)wr;
 	sig_ptr = &pitch_ref_buf[40];
 	for(i = 146; i < 256; i++) 

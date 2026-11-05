@@ -102,7 +102,7 @@ Page {
                 anchors.rightMargin: 8
                 text: parent.t
                 wrapMode: Text.WrapAnywhere
-                font.family: page.monoFont !== "" ? page.monoFont : font.family
+                font.family: page.monoFont !== "" ? page.monoFont : Qt.application.font.family
                 font.pixelSize: 12
                 color: /error|fail|banned|invalid/i.test(parent.t) ? "#FCA5A5" : "#D1D5DB"
                 textFormat: Text.PlainText

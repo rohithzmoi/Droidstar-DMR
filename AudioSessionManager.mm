@@ -18,21 +18,24 @@
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import <Metal/Metal.h>
 #import <objc/runtime.h>
 #include <atomic>
 #include "droidstar.h"
+#include "AudioSessionManager.h"
 
 // Forward declarations for callbacks
 extern "C" void callProcessConnect();
 extern "C" void clearAudioBuffer();
 
 // Callback function pointers for PTT control from remote commands
-static void (*g_pttPressCallback)(void) = NULL;
-static void (*g_pttReleaseCallback)(void) = NULL;
+static std::atomic<DSMediaButtonCallback> g_mediaButtonCallback{nullptr};
+static std::atomic<bool> g_mediaTrackButtonsEnabled{false};
 
 // Thread-safe state for cross-thread queries from AudioEngine (m_modethread)
 static std::atomic<bool> g_appInBackground{false};
 static std::atomic<uint32_t> g_audioRouteGeneration{1};
+static std::atomic<uint32_t> g_audioIOInvalidation{0};
 static std::atomic<bool> g_appleVoiceIsolationEnabled{true};
 static std::atomic<bool> g_iosExternalMicActive{false};
 static std::atomic<double> g_activeSampleRate{48000.0};
@@ -73,10 +76,14 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
     NSTimeInterval _lastRouteConfigTime;
     NSTimeInterval _lastSelfCategoryChangeTime;
     NSTimeInterval _lastRemotePttToggleTime;
+    NSTimeInterval _mediaCommandSuppressUntil;   // earbuds send play/pause on connect, wear and wake
     BOOL _isConfiguringSession;
     BOOL _speakerOverrideApplied;
     dispatch_queue_t _sessionQueue;
     DSAudioSessionPolicy _appliedPolicy;
+    NSString *_lastRouteSignature;
+    NSTimeInterval _lastPreferredInputAttemptTime;
+    NSString *_lastPreferredInputUID;
 
     // Current state info for Now Playing
     NSString *_currentCallsign;
@@ -132,6 +139,58 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 
 @end
 
+#pragma mark - Session policy constants
+
+// Single source of truth for the category options the whole app runs with. One PlayAndRecord
+// session stays up across PTT so the capture source and playback sink are never torn down on key-up.
+//  - AllowBluetooth (HFP) carries the earphone microphone. Once the HFP input is the preferred input,
+//    iOS moves the output onto the same HFP link, so TX and RX both use the earphone.
+//  - AllowBluetoothA2DP keeps RX on a Bluetooth device that only offers A2DP to this session, or whose
+//    HFP link is still being brought up, instead of dropping to the handset speaker. When a device
+//    offers both profiles iOS gives the HFP ports priority.
+//  - DefaultToSpeaker only changes the no-accessory default from the earpiece to the loudspeaker.
+static inline AVAudioSessionCategoryOptions ds_enforcedCategoryOptions(void) {
+#if TARGET_OS_SIMULATOR
+    return AVAudioSessionCategoryOptionDefaultToSpeaker;
+#else
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return (AVAudioSessionCategoryOptionDefaultToSpeaker |
+            AVAudioSessionCategoryOptionAllowBluetooth |
+            AVAudioSessionCategoryOptionAllowBluetoothA2DP);
+#pragma clang diagnostic pop
+#endif
+}
+
+static inline BOOL ds_isBluetoothInputPort(NSString *pt) {
+    return [pt isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+           [pt isEqualToString:AVAudioSessionPortBluetoothLE];
+}
+
+static inline BOOL ds_isWiredInputPort(NSString *pt) {
+    return [pt isEqualToString:AVAudioSessionPortHeadsetMic] ||
+           [pt isEqualToString:AVAudioSessionPortUSBAudio] ||
+           [pt isEqualToString:AVAudioSessionPortCarAudio] ||
+           [pt isEqualToString:AVAudioSessionPortLineIn];
+}
+
+static inline BOOL ds_isExternalInputPort(NSString *pt) {
+    return ds_isBluetoothInputPort(pt) || ds_isWiredInputPort(pt);
+}
+
+static inline BOOL ds_isExternalOutputPort(NSString *pt) {
+    return [pt isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+           [pt isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+           [pt isEqualToString:AVAudioSessionPortBluetoothLE] ||
+           [pt isEqualToString:AVAudioSessionPortHeadphones] ||
+           [pt isEqualToString:AVAudioSessionPortCarAudio] ||
+           [pt isEqualToString:AVAudioSessionPortUSBAudio] ||
+           [pt isEqualToString:AVAudioSessionPortLineOut] ||
+           [pt isEqualToString:AVAudioSessionPortAirPlay];
+}
+
+static void *kDSSessionQueueKey = &kDSSessionQueueKey;
+
 #pragma mark - Prevent Qt QDarwinAudioSource / QDarwinAudioSink Category Clobbering
 
 @implementation AVAudioSession (DroidStarBluetoothGuard)
@@ -159,17 +218,13 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
            withOptions:(AVAudioSessionCategoryOptions)options
                  error:(NSError * _Nullable __autoreleasing *)outError {
     // Qt 6.6.1's QDarwinAudioSink::open() calls setCategory(Ambient, 0) and
+    // QDarwinAudioSource::open() calls setCategory(PlayAndRecord, MixWithOthers) right before
+    // AudioUnitInitialize. Either strips the Bluetooth options and throws the microphone off the
+    // Bluetooth HFP link back onto the built-in mic. Every category request, ours included, lands on
+    // the one option set the app runs with.
     (void)category;
     (void)options;
-#if TARGET_OS_SIMULATOR
-    AVAudioSessionCategoryOptions enforcedOpts = AVAudioSessionCategoryOptionDefaultToSpeaker;
-#else
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    AVAudioSessionCategoryOptions enforcedOpts = (AVAudioSessionCategoryOptionDefaultToSpeaker |
-                                                  AVAudioSessionCategoryOptionAllowBluetooth);
-#pragma clang diagnostic pop
-#endif
+    const AVAudioSessionCategoryOptions enforcedOpts = ds_enforcedCategoryOptions();
     if ([self.category isEqualToString:AVAudioSessionCategoryPlayAndRecord] &&
         ((self.categoryOptions & enforcedOpts) == enforcedOpts)) {
         return YES;
@@ -227,10 +282,15 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
         _lastRouteConfigTime = 0;
         _lastSelfCategoryChangeTime = 0;
         _lastRemotePttToggleTime = 0;
+        _mediaCommandSuppressUntil = 0;
         _isConfiguringSession = NO;
         _speakerOverrideApplied = NO;
         dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
         _sessionQueue = dispatch_queue_create("org.dudetronics.droidstar.audiosession", attr);
+        dispatch_queue_set_specific(_sessionQueue, kDSSessionQueueKey, kDSSessionQueueKey, NULL);
+        _lastRouteSignature = nil;
+        _lastPreferredInputAttemptTime = 0;
+        _lastPreferredInputUID = nil;
         _appliedPolicy = DSAudioSessionPolicyUnknown;
 
         if ([NSThread isMainThread]) {
@@ -380,6 +440,8 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 
         if ([self->_silentPlayer play]) {
             NSLog(@"[AudioSessionManager] Keep-alive audio started");
+            // Becoming the Now Playing app makes some headsets send an AVRCP play right away.
+            [self suppressMediaCommandsFor:3.0 reason:@"now playing started"];
             [[UIApplication sharedApplication] beginReceivingRemoteControlEvents];
         } else {
             NSLog(@"[AudioSessionManager] Failed to start keep-alive audio");
@@ -404,7 +466,7 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
     });
 }
 
-#pragma mark - Audio Session Setup & Bluetooth Routing
+#pragma mark - Session capabilities
 
 - (BOOL)isFullDuplexMode {
     return [_currentMode isEqualToString:@"IAX"];
@@ -414,64 +476,33 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
     if (!session) {
         session = [AVAudioSession sharedInstance];
     }
-
-    // Check available inputs for Bluetooth HFP/BLE or wired headset mic
-    NSArray<AVAudioSessionPortDescription *> *inputs = session.availableInputs;
-    for (AVAudioSessionPortDescription *input in inputs) {
-        NSString *pt = input.portType;
-        if ([pt isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [pt isEqualToString:AVAudioSessionPortBluetoothLE] ||
-            [pt isEqualToString:AVAudioSessionPortHeadsetMic] ||
-            [pt isEqualToString:AVAudioSessionPortCarAudio] ||
-            [pt isEqualToString:AVAudioSessionPortUSBAudio]) {
+    for (AVAudioSessionPortDescription *input in session.availableInputs) {
+        if (ds_isExternalInputPort(input.portType)) {
             return YES;
         }
     }
-
-    // Also check current route outputs & inputs (e.g. A2DP headphones, wired headphones)
     AVAudioSessionRouteDescription *route = session.currentRoute;
     for (AVAudioSessionPortDescription *output in route.outputs) {
-        NSString *pt = output.portType;
-        if ([pt isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
-            [pt isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [pt isEqualToString:AVAudioSessionPortBluetoothLE] ||
-            [pt isEqualToString:AVAudioSessionPortHeadphones] ||
-            [pt isEqualToString:AVAudioSessionPortCarAudio] ||
-            [pt isEqualToString:AVAudioSessionPortUSBAudio] ||
-            [pt isEqualToString:AVAudioSessionPortAirPlay]) {
+        if (ds_isExternalOutputPort(output.portType)) {
             return YES;
         }
     }
     for (AVAudioSessionPortDescription *input in route.inputs) {
-        NSString *pt = input.portType;
-        if ([pt isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [pt isEqualToString:AVAudioSessionPortBluetoothLE] ||
-            [pt isEqualToString:AVAudioSessionPortHeadsetMic] ||
-            [pt isEqualToString:AVAudioSessionPortCarAudio] ||
-            [pt isEqualToString:AVAudioSessionPortUSBAudio]) {
+        if (ds_isExternalInputPort(input.portType)) {
             return YES;
         }
     }
-
     return NO;
 }
 
 - (DSAudioSessionPolicy)desiredSessionPolicy {
-    // Always keep AVAudioSession in Duplex (PlayAndRecord + DefaultToSpeaker +
+    // One Duplex session (PlayAndRecord) for the life of the app: no category flips on PTT, so no
+    // route switches, mic array overrides or category races between threads.
     return DSAudioSessionPolicyDuplex;
 }
 
 - (AVAudioSessionCategoryOptions)desiredDuplexCategoryOptions {
-#if TARGET_OS_SIMULATOR
-    return AVAudioSessionCategoryOptionDefaultToSpeaker;
-#else
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    // Omit AllowBluetoothA2DP so iOS routes both input and output via Bluetooth HFP
-    return (AVAudioSessionCategoryOptionDefaultToSpeaker |
-            AVAudioSessionCategoryOptionAllowBluetooth);
-#pragma clang diagnostic pop
-#endif
+    return ds_enforcedCategoryOptions();
 }
 
 - (BOOL)isCategoryClobbered:(AVAudioSession *)session {
@@ -479,90 +510,264 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
         return YES;
     }
 #if !TARGET_OS_SIMULATOR
-    AVAudioSessionCategoryOptions desiredOpts = [self desiredDuplexCategoryOptions];
+    const AVAudioSessionCategoryOptions desiredOpts = ds_enforcedCategoryOptions();
     if ((session.categoryOptions & desiredOpts) != desiredOpts) {
         return YES;
     }
 #endif
+    if (![session.mode isEqualToString:AVAudioSessionModeDefault]) {
+        return YES;
+    }
     return NO;
 }
 
-- (void)applySessionPolicy:(BOOL)force reason:(NSString *)reason {
-    dispatch_async(_sessionQueue, ^{
-        if (self->_isConfiguringSession) {
+#pragma mark - Session queue helpers
+
+// Everything that mutates AVAudioSession runs on one serial queue, in order. The sync variant is
+// for PTT, where the caller is about to open the capture source and must see the final route.
+- (void)onSessionQueueSync:(dispatch_block_t)block {
+    if (dispatch_get_specific(kDSSessionQueueKey) == kDSSessionQueueKey) {
+        block();
+    } else {
+        dispatch_sync(_sessionQueue, block);
+    }
+}
+
+- (void)onSessionQueueAsync:(dispatch_block_t)block {
+    if (dispatch_get_specific(kDSSessionQueueKey) == kDSSessionQueueKey) {
+        block();
+    } else {
+        dispatch_async(_sessionQueue, block);
+    }
+}
+
+#pragma mark - Route state published to AudioEngine
+
+- (NSString *)routeSignature:(AVAudioSession *)session {
+    NSMutableString *sig = [NSMutableString string];
+    AVAudioSessionRouteDescription *route = session.currentRoute;
+    for (AVAudioSessionPortDescription *input in route.inputs) {
+        [sig appendFormat:@"i:%@;", input.UID ?: input.portType];
+    }
+    for (AVAudioSessionPortDescription *output in route.outputs) {
+        [sig appendFormat:@"o:%@;", output.UID ?: output.portType];
+    }
+    [sig appendFormat:@"sr:%.0f", session.sampleRate];
+    return sig;
+}
+
+// The engine (mode thread) never talks to AVAudioSession directly. It reads three things from here:
+// the hardware sample rate, whether an external microphone is in the route, and a route generation
+// counter. The counter only moves when the real route (ports or rate) changed, and that is what makes
+// AudioEngine rebuild its QAudioSource / QAudioSink on the new hardware instead of on every policy pass.
+- (void)publishRouteState:(AVAudioSession *)session reason:(NSString *)reason {
+    const double rate = session.sampleRate;
+    if (rate >= 8000.0) {
+        g_activeSampleRate.store(rate, std::memory_order_relaxed);
+    }
+
+    BOOL externalMic = NO;
+    for (AVAudioSessionPortDescription *input in session.currentRoute.inputs) {
+        if (ds_isExternalInputPort(input.portType)) {
+            externalMic = YES;
+            break;
+        }
+    }
+    g_iosExternalMicActive.store(externalMic, std::memory_order_relaxed);
+    AudioEngine::setExternalMicActive(externalMic);
+
+    NSString *sig = [self routeSignature:session];
+    if (_lastRouteSignature == nil || ![sig isEqualToString:_lastRouteSignature]) {
+        _lastRouteSignature = sig;
+        g_audioRouteGeneration.fetch_add(1, std::memory_order_relaxed);
+        NSLog(@"[AudioSessionManager] Route changed (%@): %@", reason, sig);
+    }
+}
+
+#pragma mark - Audio Session Setup & Bluetooth Routing
+
+- (AVAudioSessionPortDescription *)preferredExternalInput:(AVAudioSession *)session {
+    NSArray<AVAudioSessionPortDescription *> *inputs = session.availableInputs;
+    for (AVAudioSessionPortDescription *input in inputs) {
+        if (ds_isBluetoothInputPort(input.portType)) {
+            return input;
+        }
+    }
+    for (AVAudioSessionPortDescription *input in inputs) {
+        if (ds_isWiredInputPort(input.portType)) {
+            return input;
+        }
+    }
+    return nil;
+}
+
+// Idempotent. Runs on the session queue.
+- (void)applyPolicyOnQueue:(BOOL)force reason:(NSString *)reason {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+    const AVAudioSessionCategoryOptions opts = ds_enforcedCategoryOptions();
+    const BOOL clobbered = [self isCategoryClobbered:session];
+    const BOOL reconfigure = force || clobbered || !_isAudioSessionActive ||
+                             (_appliedPolicy != DSAudioSessionPolicyDuplex);
+
+    if (reconfigure) {
+        _lastSelfCategoryChangeTime = [NSProcessInfo processInfo].systemUptime;
+        if (![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord] ||
+            ((session.categoryOptions & opts) != opts)) {
+            if (![session setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:opts error:&error]) {
+                NSLog(@"[AudioSessionManager] setCategory failed (%@): %@", reason, error.localizedDescription);
+            }
+        }
+        if (![session.mode isEqualToString:AVAudioSessionModeDefault]) {
+            error = nil;
+            [session setMode:AVAudioSessionModeDefault error:&error];
+        }
+        if ([self preferredExternalInput:session] == nil) {
+            // Handset hardware: ask for 48 kHz so the mixer never down-switches. Bluetooth / wired
+            // devices dictate their own rate and must not be fought.
+            if (fabs(session.preferredSampleRate - 48000.0) > 1.0) {
+                [session setPreferredSampleRate:48000.0 error:nil];
+            }
+        }
+        if (fabs(session.preferredIOBufferDuration - 0.02) > 0.0005) {
+            [session setPreferredIOBufferDuration:0.02 error:nil];
+        }
+    }
+
+    // Activation is never gated on our own flag alone: interruptions and media-server resets drop
+    // it without telling us in time, and setActive:YES on an already active session is a no-op.
+    if (reconfigure || !_isAudioSessionActive) {
+        error = nil;
+        if ([session setActive:YES error:&error]) {
+            _isAudioSessionActive = YES;
+            _appliedPolicy = DSAudioSessionPolicyDuplex;
+        } else {
+            _isAudioSessionActive = NO;
+            NSLog(@"[AudioSessionManager] setActive failed (%@): %@", reason, error.localizedDescription);
+        }
+    }
+
+    [self applyPreferredInputOnQueue:session];
+    [self applyOutputOverrideOnQueue:session];
+    [self publishRouteState:session reason:reason];
+}
+
+// Bluetooth HFP / LE first, then wired / USB / car / line-in, then the handset's bottom microphone.
+// Selecting an HFP input is what makes iOS move the output onto the same HFP link.
+- (void)applyPreferredInputOnQueue:(AVAudioSession *)session {
+#if TARGET_OS_SIMULATOR
+    (void)session;
+    return;
+#else
+    AVAudioSessionPortDescription *target = [self preferredExternalInput:session];
+    AVAudioSessionPortDescription *currentInput = session.currentRoute.inputs.firstObject;
+
+    if (target != nil) {
+        const BOOL preferredOk = [session.preferredInput.UID isEqualToString:target.UID];
+        const BOOL routedOk = [currentInput.UID isEqualToString:target.UID];
+        if (preferredOk && routedOk) {
             return;
         }
-        self->_isConfiguringSession = YES;
-        @try {
-            DSAudioSessionPolicy policy = [self desiredSessionPolicy];
-            AVAudioSession *session = [AVAudioSession sharedInstance];
-            AVAudioSessionCategoryOptions desiredOpts = [self desiredDuplexCategoryOptions];
-            const BOOL categoryClobbered = [self isCategoryClobbered:session];
-
-            if (!force && self->_isAudioSessionActive && policy == self->_appliedPolicy && !categoryClobbered) {
-                [self configureAudioRouteInternal:session];
-                self->_isConfiguringSession = NO;
-                return;
-            }
-
-            NSError *error = nil;
-            BOOL success = NO;
-            NSString *category = AVAudioSessionCategoryPlayAndRecord;
-            AVAudioSessionCategoryOptions options = desiredOpts;
-            const double prevSampleRate = session.sampleRate;
-
-            self->_lastSelfCategoryChangeTime = [NSProcessInfo processInfo].systemUptime;
-            success = [session setCategory:category withOptions:options error:&error];
-            if (!success || error) {
-                NSLog(@"[AudioSessionManager] Error setting category: %@", error.localizedDescription);
-                self->_isConfiguringSession = NO;
-                return;
-            }
-
-            if (![session.mode isEqualToString:AVAudioSessionModeDefault]) {
-                error = nil;
-                [session setMode:AVAudioSessionModeDefault error:&error];
-            }
-
-            if (![self hasExternalAudioDevice:session]) {
-                error = nil;
-                [session setPreferredSampleRate:48000.0 error:&error];
-            }
-            error = nil;
-            [session setPreferredIOBufferDuration:0.02 error:&error];
-
-            if (!self->_isAudioSessionActive) {
-                error = nil;
-                success = [session setActive:YES error:&error];
-                if (!success || error) {
-                    NSLog(@"[AudioSessionManager] Error activating session: %@", error.localizedDescription);
-                    self->_isConfiguringSession = NO;
-                    return;
-                }
-                self->_isAudioSessionActive = YES;
-            }
-            self->_appliedPolicy = policy;
-
-            [self setPreferredInputDeviceInternal];
-            self->_lastRouteConfigTime = 0;
-            [self configureAudioRouteInternal:session];
-
-            const double newSampleRate = session.sampleRate;
-            if (newSampleRate >= 8000.0) {
-                g_activeSampleRate.store(newSampleRate, std::memory_order_relaxed);
-            }
-            const BOOL isHardwareRouteChange = [reason isEqualToString:@"hardware-route-change"] ||
-                                               [reason isEqualToString:@"interruption"] ||
-                                               [reason isEqualToString:@"connection"] ||
-                                               [reason isEqualToString:@"setup"];
-            if (isHardwareRouteChange ||
-                (prevSampleRate > 0.0 && newSampleRate > 0.0 && fabs(newSampleRate - prevSampleRate) > 100.0)) {
-                g_audioRouteGeneration.fetch_add(1, std::memory_order_relaxed);
-            }
-        } @finally {
-            self->_isConfiguringSession = NO;
+        // Re-asserting the same port more often than once a second can only make iOS flap the route.
+        const NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+        if (preferredOk && [_lastPreferredInputUID isEqualToString:target.UID] &&
+            (now - _lastPreferredInputAttemptTime) < 1.0) {
+            return;
         }
-    });
+        // A loudspeaker override pins the output and stops iOS from bringing the HFP link up for
+        // the input, so lift it before asking for the Bluetooth microphone.
+        if (_speakerOverrideApplied) {
+            [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:nil];
+            _speakerOverrideApplied = NO;
+        }
+        _lastSelfCategoryChangeTime = now;
+        _lastPreferredInputAttemptTime = now;
+        _lastPreferredInputUID = [target.UID copy];
+        NSError *error = nil;
+        if ([session setPreferredInput:target error:&error]) {
+            NSLog(@"[AudioSessionManager] Preferred input -> %@ (%@)", target.portName, target.portType);
+        } else {
+            NSLog(@"[AudioSessionManager] setPreferredInput(%@) failed: %@", target.portName, error.localizedDescription);
+        }
+        return;
+    }
+
+    // No external microphone. Release a stale preference (iOS clears it when the device disappears,
+    // but not when the user turns the headset off in Control Center) and use the bottom mic.
+    if (session.preferredInput != nil) {
+        [session setPreferredInput:nil error:nil];
+    }
+    _lastPreferredInputUID = nil;
+    for (AVAudioSessionPortDescription *input in session.availableInputs) {
+        if (![input.portType isEqualToString:AVAudioSessionPortBuiltInMic]) {
+            continue;
+        }
+        for (AVAudioSessionDataSourceDescription *ds in input.dataSources) {
+            if ([ds.orientation isEqualToString:AVAudioSessionOrientationBottom]) {
+                if (![input.preferredDataSource.dataSourceID isEqualToNumber:ds.dataSourceID]) {
+                    [input setPreferredDataSource:ds error:nil];
+                }
+                break;
+            }
+        }
+        break;
+    }
+#endif
+}
+
+// DefaultToSpeaker already keeps handset playback on the loudspeaker. The override is only needed
+// when the category was clobbered and the output landed on the earpiece, and it must be lifted the
+// moment any external device is present, otherwise it pins the audio to the handset.
+- (void)applyOutputOverrideOnQueue:(AVAudioSession *)session {
+#if TARGET_OS_SIMULATOR
+    (void)session;
+    return;
+#else
+    AVAudioSessionRouteDescription *route = session.currentRoute;
+    BOOL external = NO;
+    BOOL onReceiver = NO;
+    for (AVAudioSessionPortDescription *output in route.outputs) {
+        if (ds_isExternalOutputPort(output.portType)) {
+            external = YES;
+        } else if ([output.portType isEqualToString:AVAudioSessionPortBuiltInReceiver]) {
+            onReceiver = YES;
+        }
+    }
+    for (AVAudioSessionPortDescription *input in route.inputs) {
+        if (ds_isExternalInputPort(input.portType)) {
+            external = YES;
+        }
+    }
+    if (!external && [self preferredExternalInput:session] != nil) {
+        external = YES;   // an external input is being brought up: never pin the speaker over it
+    }
+
+    if (external) {
+        if (_speakerOverrideApplied) {
+            _lastSelfCategoryChangeTime = [NSProcessInfo processInfo].systemUptime;
+            [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:nil];
+            _speakerOverrideApplied = NO;
+        }
+        return;
+    }
+
+    if (onReceiver) {
+        const NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+        if ((now - _lastRouteConfigTime) >= 0.50) {
+            _lastRouteConfigTime = now;
+            _lastSelfCategoryChangeTime = now;
+            if ([session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil]) {
+                _speakerOverrideApplied = YES;
+            }
+        }
+    }
+#endif
+}
+
+- (void)applySessionPolicy:(BOOL)force reason:(NSString *)reason {
+    [self onSessionQueueAsync:^{
+        [self applyPolicyOnQueue:force reason:reason];
+    }];
 }
 
 - (void)setupAVAudioSession {
@@ -582,7 +787,7 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 }
 
 - (void)deactivateSession {
-    dispatch_async(_sessionQueue, ^{
+    [self onSessionQueueAsync:^{
         @try {
             AVAudioSession *session = [AVAudioSession sharedInstance];
             NSError *error = nil;
@@ -596,132 +801,38 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
         } @catch (NSException *exception) {
             NSLog(@"[AudioSessionManager] Exception deactivating: %@", exception.reason);
         }
-    });
+    }];
 }
 
 - (void)configureAudioRoute:(AVAudioSession *)session {
     (void)session;
-    dispatch_async(_sessionQueue, ^{
-        if (self->_isConfiguringSession) {
-            return;
-        }
-        self->_isConfiguringSession = YES;
-        @try {
-            [self configureAudioRouteInternal:[AVAudioSession sharedInstance]];
-        } @finally {
-            self->_isConfiguringSession = NO;
-        }
-    });
+    [self onSessionQueueAsync:^{
+        [self applyPolicyOnQueue:NO reason:@"route-check"];
+    }];
 }
 
 - (void)configureAudioRouteInternal:(AVAudioSession *)session {
     session = [AVAudioSession sharedInstance];
-    AVAudioSessionCategoryOptions desiredOpts = [self desiredDuplexCategoryOptions];
-
-    if ([self isCategoryClobbered:session]) {
-        NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
-        if ((now - _lastSelfCategoryChangeTime) >= 0.35) {
-            _lastSelfCategoryChangeTime = now;
-            NSError *catErr = nil;
-            BOOL catOk = [session setCategory:AVAudioSessionCategoryPlayAndRecord
-                                  withOptions:desiredOpts
-                                        error:&catErr];
-            if (catOk && !catErr) {
-                if (!_isAudioSessionActive) {
-                    [session setActive:YES error:nil];
-                    _isAudioSessionActive = YES;
-                }
-                _appliedPolicy = DSAudioSessionPolicyDuplex;
-            }
-        }
-    }
-
-    // Always ensure preferredInput is bound to Bluetooth HFP/BLE or Headset mic if available
-    [self setPreferredInputDeviceInternal];
-
-#if TARGET_OS_SIMULATOR
-    return;
-#else
-    AVAudioSessionRouteDescription *currentRoute = session.currentRoute;
-
-    BOOL hasExternalOutput = NO;
-    BOOL alreadyOnSpeaker = NO;
-    BOOL onReceiverEarpiece = NO;
-    for (AVAudioSessionPortDescription *output in currentRoute.outputs) {
-        if ([output.portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
-            [output.portType isEqualToString:AVAudioSessionPortBluetoothLE] ||
-            [output.portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [output.portType isEqualToString:AVAudioSessionPortHeadphones] ||
-            [output.portType isEqualToString:AVAudioSessionPortCarAudio] ||
-            [output.portType isEqualToString:AVAudioSessionPortUSBAudio] ||
-            [output.portType isEqualToString:AVAudioSessionPortAirPlay]) {
-            hasExternalOutput = YES;
-            break;
-        }
-        if ([output.portType isEqualToString:AVAudioSessionPortBuiltInSpeaker]) {
-            alreadyOnSpeaker = YES;
-        }
-        if ([output.portType isEqualToString:AVAudioSessionPortBuiltInReceiver]) {
-            onReceiverEarpiece = YES;
-        }
-    }
-
-    for (AVAudioSessionPortDescription *input in currentRoute.inputs) {
-        if ([input.portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [input.portType isEqualToString:AVAudioSessionPortBluetoothLE] ||
-            [input.portType isEqualToString:AVAudioSessionPortHeadsetMic]) {
-            hasExternalOutput = YES;
-            break;
-        }
-    }
-
-    if (hasExternalOutput) {
-        NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
-        if ((now - _lastRouteConfigTime) >= 0.50) {
-            _lastRouteConfigTime = now;
-            _lastSelfCategoryChangeTime = now;
-            [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:nil];
-        }
-        return;
-    }
-
-    // Do NOT call overrideOutputAudioPort:Speaker if DefaultToSpeaker already placed output
-    if (alreadyOnSpeaker && !onReceiverEarpiece) {
-        return;
-    }
-
-    NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
-    if ((now - _lastRouteConfigTime) < 0.50) {
-        return;
-    }
-    _lastRouteConfigTime = now;
-    _lastSelfCategoryChangeTime = now;
-    [session overrideOutputAudioPort:AVAudioSessionPortOverrideSpeaker error:nil];
-#endif
+    [self applyPreferredInputOnQueue:session];
+    [self applyOutputOverrideOnQueue:session];
+    [self publishRouteState:session reason:@"route"];
 }
 
 - (void)setPreferredInputDevice {
-    dispatch_async(_sessionQueue, ^{
-        [self setPreferredInputDeviceInternal];
-    });
+    [self onSessionQueueAsync:^{
+        [self applyPolicyOnQueue:NO reason:@"preferred-input"];
+    }];
 }
 
 - (void)prepareForCapture {
     _isCapturing = YES;
     _isTransmitting = YES;
-#if !TARGET_OS_SIMULATOR
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    AVAudioSessionCategoryOptions desiredOpts = [self desiredDuplexCategoryOptions];
-    if (![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord] ||
-        ((session.categoryOptions & desiredOpts) != desiredOpts)) {
-        _lastSelfCategoryChangeTime = [NSProcessInfo processInfo].systemUptime;
-        [session setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:desiredOpts error:nil];
-    }
-    [self setPreferredInputDeviceInternal];
-#else
-    g_iosExternalMicActive.store(false, std::memory_order_relaxed);
-    AudioEngine::setExternalMicActive(false);
-#endif
+    // Called from AudioEngine::start_capture() on the mode thread right before QAudioSource::start().
+    // Run the policy synchronously so the capture source opens on the final route and reads the
+    // matching route generation and sample rate, instead of racing a change still queued here.
+    [self onSessionQueueSync:^{
+        [self applyPolicyOnQueue:NO reason:@"ptt"];
+    }];
 }
 
 - (void)finishCapture {
@@ -730,140 +841,51 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 }
 
 - (void)setPreferredInputDeviceInternal {
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-#if TARGET_OS_SIMULATOR
-    g_iosExternalMicActive.store(false, std::memory_order_relaxed);
-    AudioEngine::setExternalMicActive(false);
-    if (session.sampleRate >= 8000.0) {
-        g_activeSampleRate.store(session.sampleRate, std::memory_order_relaxed);
-    }
-    return;
-#else
-    NSError *error = nil;
-    NSArray<AVAudioSessionPortDescription *> *availableInputs = session.availableInputs;
-    AVAudioSessionPortDescription *currentInput = session.currentRoute.inputs.firstObject;
-
-    // 1. Prioritize Bluetooth HFP / BLE microphone
-    for (AVAudioSessionPortDescription *input in availableInputs) {
-        if ([input.portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [input.portType isEqualToString:AVAudioSessionPortBluetoothLE]) {
-            g_iosExternalMicActive.store(true, std::memory_order_relaxed);
-            AudioEngine::setExternalMicActive(true);
-            if (![session.preferredInput.UID isEqualToString:input.UID] ||
-                ![currentInput.UID isEqualToString:input.UID]) {
-                const double prevRate = session.sampleRate;
-                [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:nil];
-                BOOL ok = [session setPreferredInput:input error:&error];
-                if (ok) {
-                    const double newRate = session.sampleRate;
-                    if (newRate >= 8000.0) {
-                        g_activeSampleRate.store(newRate, std::memory_order_relaxed);
-                    }
-                    NSLog(@"[AudioSessionManager] Routed microphone to Bluetooth (%@) SR=%.0f Hz",
-                          input.portName, newRate);
-                    if (fabs(newRate - prevRate) > 100.0 ||
-                        ![currentInput.UID isEqualToString:input.UID]) {
-                        g_audioRouteGeneration.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-            } else if (session.sampleRate >= 8000.0) {
-                g_activeSampleRate.store(session.sampleRate, std::memory_order_relaxed);
-            }
-            return;
-        }
-    }
-
-    // 2. Wired Headset / USB Audio / CarAudio / LineIn microphone
-    for (AVAudioSessionPortDescription *input in availableInputs) {
-        if ([input.portType isEqualToString:AVAudioSessionPortHeadsetMic] ||
-            [input.portType isEqualToString:AVAudioSessionPortUSBAudio] ||
-            [input.portType isEqualToString:AVAudioSessionPortCarAudio] ||
-            [input.portType isEqualToString:AVAudioSessionPortLineIn]) {
-            g_iosExternalMicActive.store(true, std::memory_order_relaxed);
-            AudioEngine::setExternalMicActive(true);
-            if (![session.preferredInput.UID isEqualToString:input.UID] ||
-                ![currentInput.UID isEqualToString:input.UID]) {
-                const double prevRate = session.sampleRate;
-                [session overrideOutputAudioPort:AVAudioSessionPortOverrideNone error:nil];
-                BOOL ok = [session setPreferredInput:input error:&error];
-                if (ok) {
-                    const double newRate = session.sampleRate;
-                    if (newRate >= 8000.0) {
-                        g_activeSampleRate.store(newRate, std::memory_order_relaxed);
-                    }
-                    NSLog(@"[AudioSessionManager] Routed microphone to Headset/USB (%@) SR=%.0f Hz",
-                          input.portName, newRate);
-                    if (fabs(newRate - prevRate) > 100.0 ||
-                        ![currentInput.UID isEqualToString:input.UID]) {
-                        g_audioRouteGeneration.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-            } else if (session.sampleRate >= 8000.0) {
-                g_activeSampleRate.store(session.sampleRate, std::memory_order_relaxed);
-            }
-            return;
-        }
-    }
-
-    // 3. Built-in microphone when no external mic is connected
-    if (session.preferredInput != nil) {
-        [session setPreferredInput:nil error:nil];
-    }
-    for (AVAudioSessionPortDescription *input in availableInputs) {
-        if ([input.portType isEqualToString:AVAudioSessionPortBuiltInMic]) {
-            for (AVAudioSessionDataSourceDescription *ds in input.dataSources) {
-                if ([ds.orientation isEqualToString:AVAudioSessionOrientationBottom]) {
-                    if (![input.preferredDataSource.dataSourceID isEqualToNumber:ds.dataSourceID]) {
-                        [input setPreferredDataSource:ds error:nil];
-                    }
-                    break;
-                }
-            }
-            break;
-        }
-    }
-    bool routeHasExternalMic = false;
-    for (AVAudioSessionPortDescription *inPort in session.currentRoute.inputs) {
-        NSString *pt = inPort.portType;
-        if ([pt isEqualToString:AVAudioSessionPortBluetoothHFP] ||
-            [pt isEqualToString:AVAudioSessionPortBluetoothLE] ||
-            [pt isEqualToString:AVAudioSessionPortHeadsetMic] ||
-            [pt isEqualToString:AVAudioSessionPortUSBAudio] ||
-            [pt isEqualToString:AVAudioSessionPortCarAudio] ||
-            [pt isEqualToString:AVAudioSessionPortLineIn]) {
-            routeHasExternalMic = true;
-            break;
-        }
-    }
-    g_iosExternalMicActive.store(routeHasExternalMic, std::memory_order_relaxed);
-    AudioEngine::setExternalMicActive(routeHasExternalMic);
-    if (session.sampleRate >= 8000.0) {
-        g_activeSampleRate.store(session.sampleRate, std::memory_order_relaxed);
-    }
-#endif
+    [self applyPreferredInputOnQueue:[AVAudioSession sharedInstance]];
 }
 
 #pragma mark - Remote Command Center (Control Center / Lock Screen / Bluetooth Earbuds)
 
+// Headsets emit AVRCP play/pause on their own when they connect, wake from sleep, become the
+// Now Playing route, or detect being worn or removed. iOS delivers those exactly like a button
+// press, so media commands are ignored for a short settling window after such events. Our own
+// policy changes (category/override) are not covered, so a real press right after keying TX works.
+- (void)suppressMediaCommandsFor:(NSTimeInterval)seconds reason:(NSString *)reason {
+    NSTimeInterval until = [NSProcessInfo processInfo].systemUptime + seconds;
+    if (until > _mediaCommandSuppressUntil) {
+        _mediaCommandSuppressUntil = until;
+    }
+    NSLog(@"[AudioSessionManager] Media button ignored for %.1fs (%@)", seconds, reason);
+}
+
 - (void)handleRemotePttToggle {
     NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
-    // Debounce 250ms in case Bluetooth earbuds send both play/pause and togglePlayPause
-    if ((now - _lastRemotePttToggleTime) < 0.25) {
+    if (now < _mediaCommandSuppressUntil) {
+        NSLog(@"[AudioSessionManager] Media command ignored: route settling (%.1fs left)",
+              _mediaCommandSuppressUntil - now);
+        return;
+    }
+    // Bluetooth earbuds can deliver play/pause and togglePlayPause for one physical press.
+    if ((now - _lastRemotePttToggleTime) < 0.05) {
         return;
     }
     _lastRemotePttToggleTime = now;
 
-    if (g_pttPressCallback && g_pttReleaseCallback) {
-        if (self->_isTransmitting) {
-            g_pttReleaseCallback();
-        } else {
-            g_pttPressCallback();
-        }
+    DSMediaButtonCallback cb = g_mediaButtonCallback.load();
+    if (cb) {
+        cb(0);
     }
 }
 
 - (void)setupRemoteCommandCenter {
     MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
+    // Re-run after a media-services reset: drop the previous handlers or every press fires N times.
+    [commandCenter.playCommand removeTarget:nil];
+    [commandCenter.pauseCommand removeTarget:nil];
+    [commandCenter.togglePlayPauseCommand removeTarget:nil];
+    [commandCenter.stopCommand removeTarget:nil];
+    [commandCenter.nextTrackCommand removeTarget:nil];
+    [commandCenter.previousTrackCommand removeTarget:nil];
 
     // Play command (many Bluetooth earbuds send Play on stem/button press)
     commandCenter.playCommand.enabled = YES;
@@ -889,19 +911,31 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
         return MPRemoteCommandHandlerStatusSuccess;
     }];
 
-    // Stop command
+    // Stop command: always a release/safety stop
     commandCenter.stopCommand.enabled = YES;
     [commandCenter.stopCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *) {
         NSLog(@"[AudioSessionManager] Remote stop command received");
-        if (self->_isTransmitting && g_pttReleaseCallback) {
-            g_pttReleaseCallback();
+        DSMediaButtonCallback cb = g_mediaButtonCallback.load();
+        if (cb) {
+            cb(1);
         }
         return MPRemoteCommandHandlerStatusSuccess;
     }];
 
-    // Disable skip commands (not applicable for radio)
-    commandCenter.nextTrackCommand.enabled = NO;
-    commandCenter.previousTrackCommand.enabled = NO;
+    // Next/previous track: optional press sources (steering wheel buttons, headset skip keys)
+    const BOOL track = g_mediaTrackButtonsEnabled.load();
+    commandCenter.nextTrackCommand.enabled = track;
+    [commandCenter.nextTrackCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *) {
+        NSLog(@"[AudioSessionManager] Remote next track received - PTT press");
+        [self handleRemotePttToggle];
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
+    commandCenter.previousTrackCommand.enabled = track;
+    [commandCenter.previousTrackCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *) {
+        NSLog(@"[AudioSessionManager] Remote previous track received - PTT press");
+        [self handleRemotePttToggle];
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
     commandCenter.skipForwardCommand.enabled = NO;
     commandCenter.skipBackwardCommand.enabled = NO;
     commandCenter.seekForwardCommand.enabled = NO;
@@ -1002,6 +1036,14 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 }
 
 - (void)setCurrentRX:(NSString *)callsign name:(NSString *)name country:(NSString *)country {
+    // Called for every RX packet (50 Hz): writing MPNowPlayingInfoCenter each time is an XPC on the
+    // main thread. Only push when something actually changed.
+    NSString *cs = callsign ?: @"";
+    NSString *nm = name ?: @"";
+    NSString *co = country ?: @"";
+    if ([_currentCallsign isEqualToString:cs] && [_currentName isEqualToString:nm] && [_currentCountry isEqualToString:co]) {
+        return;
+    }
     _currentCallsign = [callsign copy] ?: @"";
     _currentName = [name copy] ?: @"";
     _currentCountry = [country copy] ?: @"";
@@ -1100,11 +1142,18 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
     if (interruptionType == AVAudioSessionInterruptionTypeBegan) {
         NSLog(@"[AudioSessionManager] Audio interruption began");
         _isAudioSessionActive = NO;
+        // The system stops our I/O units: make the engine rebuild its sink/source on next use
+        // instead of stopping units that will never call back again.
+        g_audioIOInvalidation.fetch_add(1, std::memory_order_relaxed);
+        g_audioRouteGeneration.fetch_add(1, std::memory_order_relaxed);
         [self stopKeepAliveAudio];
     } else if (interruptionType == AVAudioSessionInterruptionTypeEnded) {
         NSLog(@"[AudioSessionManager] Audio interruption ended");
 
-        // setActive: is a synchronous XPC call into mediaserverd (tens to hundreds of ms after
+        // setActive: is a synchronous XPC call into mediaserverd (tens to hundreds of ms after a
+        // phone call / Siri). Notifications arrive on the main thread, so do the reactivation on the
+        // session queue like every other activate/deactivate in this file, then resume the policy
+        // and keep-alive from there.
         dispatch_async(_sessionQueue, ^{
             AVAudioSession *session = [AVAudioSession sharedInstance];
             NSError *error = nil;
@@ -1127,38 +1176,67 @@ static inline void runOnMainThreadAsync(dispatch_block_t block) {
 - (void)handleAudioRouteChange:(NSNotification *)notification {
     AVAudioSessionRouteChangeReason reason = (AVAudioSessionRouteChangeReason)
         [notification.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
+    AVAudioSessionRouteDescription *previous = notification.userInfo[AVAudioSessionRouteChangePreviousRouteKey];
+    NSLog(@"[AudioSessionManager] Route change reason=%lu previous=%@ now=%@",
+          (unsigned long)reason,
+          previous.outputs.firstObject.portType ?: @"-",
+          [AVAudioSession sharedInstance].currentRoute.outputs.firstObject.portType ?: @"-");
+
+    if (reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable ||
+        reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable ||
+        reason == AVAudioSessionRouteChangeReasonWakeFromSleep) {
+        [self suppressMediaCommandsFor:2.5 reason:@"hardware route change"];
+    }
 
     switch (reason) {
-        case AVAudioSessionRouteChangeReasonOldDeviceUnavailable:
         case AVAudioSessionRouteChangeReasonNewDeviceAvailable:
+        case AVAudioSessionRouteChangeReasonOldDeviceUnavailable:
         case AVAudioSessionRouteChangeReasonRouteConfigurationChange:
+        case AVAudioSessionRouteChangeReasonNoSuitableRouteForCategory:
+        case AVAudioSessionRouteChangeReasonWakeFromSleep:
+        case AVAudioSessionRouteChangeReasonUnknown:
+            // Hardware came or went (earphones connected / removed, HFP link up): re-run the whole
+            // policy so the preferred input follows the hardware and the engine learns the new rate.
             _lastRouteConfigTime = 0;
             [self applySessionPolicy:YES reason:@"hardware-route-change"];
             break;
 
         case AVAudioSessionRouteChangeReasonCategoryChange:
         case AVAudioSessionRouteChangeReasonOverride: {
-            NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
-            if (_isConfiguringSession || (now - _lastSelfCategoryChangeTime) < 0.35) {
-                break;
-            }
-            AVAudioSession *session = [AVAudioSession sharedInstance];
-            if ([self isCategoryClobbered:session]) {
-                _lastRouteConfigTime = 0;
-                [self configureAudioRoute:session];
-            }
+            // Our own category / override / preferred-input calls land here as well. Only repair the
+            // session when somebody else changed it, but always publish the resulting route so the
+            // engine follows a Bluetooth link that came up asynchronously after setPreferredInput.
+            const NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+            const BOOL selfInduced = (now - _lastSelfCategoryChangeTime) < 0.35;
+            [self onSessionQueueAsync:^{
+                AVAudioSession *session = [AVAudioSession sharedInstance];
+                if (!selfInduced && [self isCategoryClobbered:session]) {
+                    self->_lastRouteConfigTime = 0;
+                    [self applyPolicyOnQueue:YES reason:@"category-clobbered"];
+                } else {
+                    [self applyPreferredInputOnQueue:session];
+                    [self applyOutputOverrideOnQueue:session];
+                    [self publishRouteState:session reason:@"route-update"];
+                }
+            }];
             break;
         }
 
         default:
+            [self onSessionQueueAsync:^{
+                [self publishRouteState:[AVAudioSession sharedInstance] reason:@"route-update"];
+            }];
             break;
     }
 }
 
 - (void)handleMediaServicesWereReset:(NSNotification *)notification {
+    [self suppressMediaCommandsFor:3.0 reason:@"media services reset"];
     NSLog(@"[AudioSessionManager] Media services reset - reinitializing");
     _isAudioSessionActive = NO;
     _appliedPolicy = DSAudioSessionPolicyUnknown;
+    g_audioIOInvalidation.fetch_add(1, std::memory_order_relaxed);   // every audio unit is dead now
+    g_audioRouteGeneration.fetch_add(1, std::memory_order_relaxed);
     [self stopKeepAliveAudio];
     [self setupRemoteCommandCenter];
     [self setupAVAudioSession];
@@ -1306,10 +1384,33 @@ extern "C" void ensureSpeakerRoute() {
     [[AudioSessionManager sharedManager] configureAudioRoute:[AVAudioSession sharedInstance]];
 }
 
-extern "C" void setPTTCallbacks(void (*pressCallback)(void), void (*releaseCallback)(void)) {
-    g_pttPressCallback = pressCallback;
-    g_pttReleaseCallback = releaseCallback;
-    NSLog(@"[AudioSessionManager] PTT callbacks registered");
+extern "C" void setMediaButtonCallback(DSMediaButtonCallback callback) {
+    g_mediaButtonCallback.store(callback);
+    NSLog(@"[AudioSessionManager] Media button callback %@", callback ? @"registered" : @"cleared");
+}
+
+extern "C" void setMediaTrackButtonsEnabled(bool enabled) {
+    g_mediaTrackButtonsEnabled.store(enabled);
+    runOnMainThreadAsync(^{
+        MPRemoteCommandCenter *cc = [MPRemoteCommandCenter sharedCommandCenter];
+        cc.nextTrackCommand.enabled = enabled;
+        cc.previousTrackCommand.enabled = enabled;
+    });
+}
+
+extern "C" bool ios_metal_supports_family7(void) {
+    // Called from the transcription worker and the GUI thread: compute once, thread-safely.
+    static bool value = false;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+        value = dev && [dev respondsToSelector:@selector(supportsFamily:)] && [dev supportsFamily:MTLGPUFamilyApple7];
+    });
+    return value;
+}
+
+extern "C" uint32_t getAudioIOInvalidationGeneration(void) {
+    return g_audioIOInvalidation.load(std::memory_order_relaxed);
 }
 
 extern "C" bool getSafeAreaInsets(double *top, double *left, double *bottom, double *right) {

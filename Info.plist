@@ -60,9 +60,9 @@
 		<true/>
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>DroidStar uses Bluetooth to route audio to and from your wireless headset or earbuds.</string>
+	<string>DroidStar uses Bluetooth to route audio to your wireless headset and to connect Bluetooth push-to-talk buttons.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>We need Bluetooth access to use your device's microphone.</string>
+	<string>DroidStar uses Bluetooth for wireless headsets and push-to-talk buttons.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>This app uses the microphone to transmit audio</string>
 	<key>NSMicrophoneUsageDescription</key>

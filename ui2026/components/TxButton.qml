@@ -67,8 +67,9 @@ Rectangle {
         border.width: 2
         visible: root.live
         SequentialAnimation on opacity {
-            running: root.live
+            running: root.live && root.visible && Qt.application.state === Qt.ApplicationActive
             loops: Animation.Infinite
+            alwaysRunToEnd: true
             NumberAnimation { from: 0.8; to: 0.1; duration: 700; easing.type: Easing.InOutSine }
             NumberAnimation { from: 0.1; to: 0.8; duration: 700; easing.type: Easing.InOutSine }
         }

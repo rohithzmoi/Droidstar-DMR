@@ -291,7 +291,7 @@ static inline int load_reg(const uint8_t val[], int len)
 		int b[9];
 		int16_t frame_vector[8];	// result ignored
         uint8_t ambe_frame[56];
-		memset(ambe, 0, 9);
+		memset(ambe, 0, 7);	// 49-bit frame = 7 bytes; YSF DN / NXDN callers pass a 7-byte buffer
 		
 		vocoder.imbe_encode(frame_vector, pcm);
 		encode_ambe(vocoder.param(), b, m_encParms->m_cur_mp, m_encParms->m_prev_mp, false, 1.0, &m_ambe2_gain_s);

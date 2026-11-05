@@ -18,12 +18,21 @@
 
 #include "audioengine.h"
 #include "TranscriptionEngine.h"
+#include "QsoReplayCapture.h"
 #include <QDebug>
 #include <QSettings>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
 #include <QtMath>
+#include <QElapsedTimer>
+
+static qint64 captureMonotonicMs()
+{
+    static QElapsedTimer t = [] { QElapsedTimer x; x.start(); return x; }();
+    return t.elapsed();
+}
+
 #ifdef Q_OS_IOS
 #include "AudioSessionManager.h"
 #endif
@@ -60,7 +69,7 @@ void ensureEnhancerSettingsLoaded()
     if (s_enhancerSettingsLoaded.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    // Load persisted user config for built-in mic (defaults: NR = Neural AI, HD Voice
+    // Load persisted user config for built-in mic (defaults: NR = Neural AI, HD Voice = true, Mic Leveler = false)
     QSettings settings(QSettings::IniFormat, QSettings::UserScope, QStringLiteral("dudetronics"), QStringLiteral("droidstar"));
     const int nrMode = std::clamp(settings.value(QStringLiteral("AUDIO_NR_MODE"), static_cast<int>(AudioEnhancer::NoiseNeural)).toInt(), 0, 2);
     const bool hdOn = settings.value(QStringLiteral("AUDIO_HD_UPSCALE"), true).toBool();
@@ -132,7 +141,7 @@ void AudioEngine::setExternalMicActive(bool externalActive)
     ensureEnhancerSettingsLoaded();
     const bool prev = s_externalMicActive.exchange(externalActive, std::memory_order_acq_rel);
     if (externalActive) {
-        // When mic is Bluetooth, wired headset, or external (not built-in), auto-disable all
+        // When mic is Bluetooth, wired headset, or external (not built-in), auto-disable all TX enhancements
         s_globalNoiseMode.store(static_cast<int>(AudioEnhancer::NoiseOff), std::memory_order_relaxed);
         s_globalHdUpscale.store(false, std::memory_order_relaxed);
         s_globalTxEnhance.store(false, std::memory_order_relaxed);
@@ -296,7 +305,9 @@ static inline int16_t clampToInt16(float x)
     return static_cast<int16_t>(lrintf(x));
 }
 
-// Smooth algebraic pre-amp soft-saturation ceiling (linear up to 22000, then
+// Smooth algebraic pre-amp soft-saturation ceiling (linear up to 22000, then C1-continuous
+// u / sqrt(1 + u^2) curve asymptotically approaching 32765). Preserves natural harmonic
+// roundness without hard flat-topping or frequency filtering.
 static inline float cleanPreampCeiling(float x)
 {
     if (!std::isfinite(x)) return 0.0f;
@@ -390,7 +401,9 @@ void AudioEngine::updatePlaybackReconstructionFilter(bool hdActive)
 {
     m_lastPlayHdMode = hdActive;
     const float fs = static_cast<float>(std::max(8000, m_playbackDeviceRate));
-    // Only Hermite images around multiples of 16 kHz (>= 12 kHz) remain after the
+    // Only Hermite images around multiples of 16 kHz (>= 12 kHz) remain after the 47-tap half-band,
+    // so this stage sits at 6 kHz: it does not touch the 3-3.9 kHz consonant band (a 3.75 kHz LR4 cost
+    // -4.4 dB at 3 kHz and -7 dB at 3.4 kHz, which read as "muffled").
     const float desiredCutoff = 6000.0f;
     const float fc = std::min(desiredCutoff, fs * 0.45f);
     const float z1_1 = m_playLowpass.z1;
@@ -437,7 +450,7 @@ void AudioEngine::set_output_buffer_size(uint32_t b)
 void AudioEngine::set_input_buffer_size(uint32_t b)
 {
     if (m_in) {
-        // Scale buffer size proportionally when capturing at native high sample rate (e.g.
+        // Scale buffer size proportionally when capturing at native high sample rate (e.g. 48 kHz vs 8 kHz)
         const uint32_t scaled = (m_captureDeviceRate > 8000)
                                 ? std::max<uint32_t>(4096U, b * static_cast<uint32_t>(m_captureDeviceRate / 8000))
                                 : std::max<uint32_t>(2048U, b);
@@ -548,7 +561,9 @@ void AudioEngine::initPlaybackSink()
         }
 #endif
         QAudioFormat candidate = preferred;
-        // Preserve preferred stereo channel count (2 channels on iOS/macOS) so CoreAudio
+        // Preserve preferred stereo channel count (2 channels on iOS/macOS) so CoreAudio RemoteIO
+        // drives both Left and Right hardware speaker channels at full 0 dBFS scale without applying
+        // mono-to-stereo pan-law attenuation (-3 to -6 dB).
         candidate.setChannelCount(std::max(1, preferred.channelCount()));
         candidate.setSampleFormat(QAudioFormat::Int16);
         if (device.isFormatSupported(candidate)) {
@@ -580,7 +595,7 @@ void AudioEngine::initPlaybackSink()
              << "Fmt:" << m_playbackSampleFormat;
 
     m_out = new QAudioSink(device, format, this);
-    // Size buffer for ~120ms at the negotiated rate to prevent underruns
+    // Size buffer for ~120ms at the negotiated rate to prevent underruns without adding latency
     const int bytesPerFrame = m_playbackChannels * ((m_playbackSampleFormat == QAudioFormat::Float) ? 4 : 2);
     const int targetBufBytes = std::clamp((m_playbackDeviceRate * bytesPerFrame * 12) / 100, 4096, 32768);
     m_out->setBufferSize(targetBufBytes);
@@ -672,14 +687,17 @@ void AudioEngine::initCaptureSource()
         }
     }
 
-    m_in = new QAudioSource(device, format, this);
+    // No QObject parent on purpose: Qt hands the source's parent to its internal Darwin object, and a
+    // dead source must be detachable without the engine deleting it later. Every path deletes m_in
+    // explicitly (destructor and initCaptureSource).
+    m_in = new QAudioSource(device, format);
     m_captureDeviceRate = (m_in->format().sampleRate() > 0) ? m_in->format().sampleRate() : format.sampleRate();
     m_captureChannels = std::max(1, m_in->format().channelCount());
     m_captureSampleFormat = m_in->format().sampleFormat();
     m_in->setVolume(1.0);
     m_srm = (m_captureDeviceRate > 0) ? (static_cast<float>(m_captureDeviceRate) / 8000.0f) : 1.0f;
 
-    // Initialize 8 kHz TX HD Voice clarity biquads (85 Hz HPF + +1.2 dB
+    // Initialize 8 kHz TX HD Voice clarity biquads (85 Hz HPF + +1.2 dB @ 220 Hz warmth + +1.8 dB @ 2000 Hz presence)
     m_capHighpass = makeHighpassBiquad(8000.0f, 85.0f, 0.70710678f);
     {
         // Peaking EQ: +1.2 dB @ 220 Hz, Q = 0.85 (fs = 8000 Hz)
@@ -739,8 +757,17 @@ void AudioEngine::start_capture()
         initCaptureSource();
     }
 #endif
+    // QAudioSource::start() resets first, which blocks forever on a source whose callbacks died.
+    if (captureSourceLooksDead()) {
+        reapCaptureSource();
+        initCaptureSource();
+    }
 
     if (m_in != nullptr) {
+        m_lastCaptureCallbackMs = captureMonotonicMs();
+#ifdef Q_OS_IOS
+        m_captureIoGen = getAudioIOInvalidationGeneration();
+#endif
         m_indev = m_in->start();
         if (m_indev != nullptr) {
             m_captureDeviceRate = (m_in->format().sampleRate() > 0) ? m_in->format().sampleRate() : m_captureDeviceRate;
@@ -752,7 +779,8 @@ void AudioEngine::start_capture()
             m_capLowpass2.z1 = m_capLowpass2.z2 = 0.0f;
             m_capNextOutPos = 0.0;
             m_capPunchInSamples = 0;
-            // 12 ms raised-cosine punch-in ramp at native hardware rate (e.g. 576 samples @ 48
+            // 12 ms raised-cosine punch-in ramp at native hardware rate (e.g. 576 samples @ 48 kHz)
+            // eliminates PTT hardware startup pop with 0.00 dB effect on passband frequency response.
             m_capPunchInTotal = static_cast<size_t>(std::max(96, (std::max(8000, m_captureDeviceRate) * 12) / 1000));
             m_tx16kCount = 0;
             m_txEnhancer.reset();
@@ -761,10 +789,57 @@ void AudioEngine::start_capture()
     }
 }
 
+bool AudioEngine::captureSourceLooksDead() const
+{
+    if (m_in == nullptr || m_in->state() == QAudio::StoppedState) {
+        return false;
+    }
+    const qint64 quietMs = captureMonotonicMs() - m_lastCaptureCallbackMs;
+#if defined(Q_OS_IOS)
+    // iOS stopped or destroyed our units (interruption / media services reset) since capture started.
+    if (getAudioIOInvalidationGeneration() != m_captureIoGen && quietMs > 120) {
+        return true;
+    }
+#endif
+#if defined(Q_OS_IOS) || defined(Q_OS_MACOS)
+    // A live input unit calls back every few ms; two seconds of silence while "running" means the
+    // unit was stopped underneath Qt. Long enough that a Bluetooth route renegotiation never trips it.
+    return quietMs > 2000;
+#else
+    // Other Qt audio backends do not block in stop()/reset().
+    Q_UNUSED(quietMs);
+    return false;
+#endif
+}
+
+void AudioEngine::reapCaptureSource()
+{
+    // QDarwinAudioSource::stop(), reset() and its destructor all wait, without a timeout, on a condition
+    // that only the (now dead) input callback can signal, so stopping or deleting it here would hang
+    // this thread forever. It also owns a QTimer registered on this thread, so it cannot be deleted
+    // from any other thread either. The safe outcome is to detach it and leave it alone: one stopped
+    // audio unit per interruption, instead of a frozen app.
+    if (m_indev != nullptr) {
+        m_indev->disconnect(this);
+    }
+    QAudioSource *dead = m_in;
+    m_in = nullptr;
+    m_indev = nullptr;
+    if (dead == nullptr) {
+        return;
+    }
+    qWarning() << "[AudioEngine] capture source stopped calling back; detaching it instead of stopping it";
+    dead->disconnect(this);
+    disconnect(dead, nullptr, this, nullptr);
+}
+
 void AudioEngine::stop_capture()
 {
     m_audioinq.clear();
     m_tx16kCount = 0;
+    if (captureSourceLooksDead()) {
+        reapCaptureSource();
+    }
     if (m_in != nullptr) {
         if (m_indev != nullptr) {
             m_indev->disconnect(this);
@@ -784,6 +859,9 @@ void AudioEngine::stop_capture()
 
 void AudioEngine::start_playback()
 {
+    // QSO Replay: one over starts here. Idempotent, so the sink re-init after a route change
+    // (which calls start_playback() again) never splits a clip.
+    QsoReplayCapture::beginOver(QsoReplayCapture::Kind::Rx);
 #ifdef Q_OS_IOS
     const int activeRate = static_cast<int>(lrint(getActiveAudioSampleRate()));
     const uint32_t currentGen = getAudioRouteGeneration();
@@ -824,7 +902,9 @@ void AudioEngine::start_playback()
             // Restore PlayAndRecord session after QDarwinAudioSink::open() resets category
             ensureSpeakerRoute();
 #endif
-            // Prefill ~60 ms so the sink does not starve on a late packet.
+            // Jitter prefill: prime the sink with 60 ms of silence so the hardware never starves
+            // when a network packet arrives a frame or two late (each starvation was a 40-90 ms
+            // digital-zero hole plus a broadband click in the measured output).
             if (m_outdev != nullptr) {
                 const int prefillFrames = std::max(1, (m_playbackDeviceRate * 60) / 1000);
                 const int ch = std::max(1, m_playbackChannels);
@@ -849,11 +929,16 @@ void AudioEngine::stop_playback()
         if (TranscriptionEngine *te = TranscriptionEngine::instance()) {
             te->markEndOfTransmission();
         }
+        QsoReplayCapture::endOver(QsoReplayCapture::Kind::Rx);
     }
     if (m_out != nullptr) {
         m_outdev = nullptr;
         if (m_out->state() != QAudio::StoppedState) {
-            // In Qt 6.6.1 QDarwinAudioSink: - stop() enters Draining state when Active and blocks on
+            // In Qt 6.6.1 QDarwinAudioSink:
+            // - stop() enters Draining state when Active and blocks on m_drainSemaphore (500ms or infinite hang).
+            // - reset() directly from Active resets m_audioBuffer BEFORE AudioOutputUnitStop, racing with renderCallback.
+            // Calling suspend() first stops the CoreAudio AudioUnit immediately, and reset() then clears the ring buffer
+            // and transitions to StoppedState with shouldDrain=false without ever waiting on m_drainSemaphore.
             m_out->suspend();
             m_out->reset();
         }
@@ -866,6 +951,7 @@ void AudioEngine::input_data_received()
     if (m_indev == nullptr) {
         return;
     }
+    m_lastCaptureCallbackMs = captureMonotonicMs();
     const QByteArray data = m_indev->readAll();
     if (data.isEmpty()) {
         return;
@@ -882,7 +968,8 @@ void AudioEngine::input_data_received()
 
     const uint8_t *bytes = reinterpret_cast<const uint8_t *>(data.constData());
 
-    // Read raw unattenuated 16-bit microphone sample so Natural & Neural AI noise
+    // Read raw unattenuated 16-bit microphone sample so Natural & Neural AI noise reduction
+    // operate at true 16-bit speech levels BEFORE mode m_attenuation (m_inGain) is applied.
     auto readRawMonoFrame = [&](int frameIdx) -> float {
         const uint8_t *framePtr = bytes + (frameIdx * frameBytes);
         float sum = 0.0f;
@@ -906,7 +993,8 @@ void AudioEngine::input_data_received()
     const bool hdOn = s_globalHdUpscale.load(std::memory_order_relaxed);
     const bool txEnhanceOn = s_globalTxEnhance.load(std::memory_order_relaxed);
 
-    // Apply 12 ms raised-cosine PTT punch-in envelope at the very start of capture to
+    // Apply 12 ms raised-cosine PTT punch-in envelope at the very start of capture to eliminate
+    // hardware ADC startup pop & screen tap click while leaving the frequency response 100% untouched.
     auto readPunchInCleanedSample = [&](int frameIdx) -> float {
         float x = readRawMonoFrame(frameIdx);
         if (m_capPunchInSamples < m_capPunchInTotal) {
@@ -919,7 +1007,11 @@ void AudioEngine::input_data_received()
         return x;
     };
 
-    // Every capture configuration goes through the same band-limited path: linear
+    // Every capture configuration goes through the same band-limited path: linear interpolation to
+    // 16 kHz, then AudioEnhancer::processTx16kFrameTo8k (200 Hz LR4 high-pass, half-band decimation,
+    // optional expander / leveler / presence EQ depending on the toggles). With NR and TX enhance off the
+    // enhancer is transparent apart from the high-pass and decimator. The former "direct" branch decimated
+    // 48 kHz -> 8 kHz by point-sampling, which aliased all 4-24 kHz room noise into the speech band.
     {
         m_txEnhancer.setNoiseMode(static_cast<AudioEnhancer::NoiseMode>(nrMode));
         m_txEnhancer.setHdUpscaleEnabled(hdOn);
@@ -939,7 +1031,7 @@ void AudioEngine::input_data_received()
                 std::array<int16_t, 160> out8k{};
                 m_txEnhancer.processTx16kFrameTo8k(m_tx16kBuf.data(), out8k.data());
                 for (size_t k = 0; k < 160; ++k) {
-                    // Apply nostar/DroidStar mode attenuation (m_inGain = v / m_attenuation) AFTER
+                    // Apply nostar/DroidStar mode attenuation (m_inGain = v / m_attenuation) AFTER conditioning
                     m_audioinq.enqueue(clampToInt16(static_cast<float>(out8k[k]) * m_inGain));
                 }
                 m_tx16kCount = 0;
@@ -949,7 +1041,8 @@ void AudioEngine::input_data_received()
         m_capNextOutPos = std::max(0.0, m_capNextOutPos - static_cast<double>(frameCount));
     }
 
-    // Cap capture queue to ~0.5 seconds (4000 samples at 8kHz) so TX never builds
+    // Cap capture queue to ~0.5 seconds (4000 samples at 8kHz) so TX never builds lag
+    // without chopping multi-frame QDarwinAudioSource timer bursts.
     while (m_audioinq.size() > 4000) {
         m_audioinq.dequeue();
     }
@@ -995,7 +1088,14 @@ void AudioEngine::write(int16_t *pcm, size_t s)
     qsizetype bytesWritten = 0;
     qsizetype attemptedBytes = 0;
 
-    // Upsample 8->16 kHz, Hermite to device rate, then lowpass.
+    // Band-limited playback reconstruction (fixes 4-8 kHz spectral imaging that made RX sound harsh/"digital"):
+    //   1. 8 kHz -> 16 kHz with a 127-tap Kaiser polyphase interpolator (flat to 3.7 kHz, -42 dB at 4 kHz,
+    //      <= -52 dB above) so even full-band codecs (Codec2, IMBE) leave no 4-4.5 kHz mirror
+    //   2. 16 kHz -> device rate with 4-point Hermite (remaining images now sit >= 12 kHz)
+    //   3. 4th-order Linkwitz-Riley low-pass at 6 kHz on the device-rate stream for those Hermite images
+    // Measured against a clean reference, the previous unfiltered 8 kHz Hermite step left speech images
+    // only ~25 dB down between 4 and 8 kHz; this chain pushes everything above 4 kHz below -68 dB for
+    // every RX codec while leaving the 3-3.5 kHz consonant band within 1 dB.
     if (m_playbackDeviceRate > 0 && m_playbackDeviceRate != inRate) {
         const size_t n16 = m_rxEnhancer.processRxUpscale8kTo16k(pcm, s, m_rx16kBuf.data(), 1.0f);
         const int midRate = 16000;
@@ -1099,19 +1199,29 @@ void AudioEngine::write(int16_t *pcm, size_t s)
                  << "bufferSize=" << (m_out ? m_out->bufferSize() : 0);
         if (bytesWritten <= 0) {
             if (++m_consecutiveWriteFailures >= 6) {
-                qWarning() << "AudioEngine::write detected stalled QAudioSink; reinitializing playback sink";
                 m_consecutiveWriteFailures = 0;
+                // Exponential back-off: a dead output (media reset, device removed) must not be
+                // torn down and rebuilt every 120 ms, which only burns CPU and spams the log.
+                const qint64 nowMs = captureMonotonicMs();
+                const qint64 holdMs = std::min<qint64>(10000, 1000LL << std::min(m_sinkRebuildCount, 4));
+                if (m_sinkRebuildCount == 0 || (nowMs - m_lastSinkRebuildMs) >= holdMs) {
+                    qWarning() << "AudioEngine::write detected stalled QAudioSink; reinitializing playback sink";
+                    m_lastSinkRebuildMs = nowMs;
+                    ++m_sinkRebuildCount;
 #ifdef Q_OS_IOS
-                ensureSpeakerRoute();
+                    ensureSpeakerRoute();
 #endif
-                initPlaybackSink();
-                start_playback();
+                    initPlaybackSink();
+                    start_playback();
+                }
             }
         } else {
             m_consecutiveWriteFailures = 0;
+            m_sinkRebuildCount = 0;
         }
     } else if (bytesWritten > 0) {
         m_consecutiveWriteFailures = 0;
+        m_sinkRebuildCount = 0;
     }
 }
 
@@ -1129,6 +1239,9 @@ uint16_t AudioEngine::read(int16_t *pcm, int s)
             if (absVal > m_maxlevel) {
                 m_maxlevel = absVal;
             }
+        }
+        if (QsoReplayCapture::txTapEnabled()) {
+            QsoReplayCapture::pushSamples(pcm, static_cast<size_t>(s));   // own TX, post-processing
         }
         return 1;
     } else if (m_in == nullptr) {
@@ -1155,6 +1268,9 @@ uint16_t AudioEngine::read(int16_t *pcm)
         }
     }
 
+    if (s > 0 && QsoReplayCapture::txTapEnabled()) {
+        QsoReplayCapture::pushSamples(pcm, static_cast<size_t>(s));
+    }
     return static_cast<uint16_t>(s);
 }
 
@@ -1170,12 +1286,18 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
     }
 
     if (m_agc) {
-        // Speech RMS AGC toward -18 dBFS with a soft peak limit.
+        // Speech-RMS AGC (replaces the former 30000-peak normalizer that drove the output into
+        // continuous clipping): instant true-peak governor at -3 dBFS, gain range -12 dB .. +20 dB,
+        // 0.15 dB/frame release so quiet talkers come up smoothly without audible pumping.
+        // The tracker follows the louder syllables (fast attack / slow decay), so a nominal
+        // 5500 RMS target measures -17.5 dBFS active-speech at the device, i.e. the same loudness
+        // as the HamTalk reference recording (-17.2 dBFS) with no samples reaching full scale.
         constexpr float kTargetRms   = 5500.0f;
         constexpr float kPeakCeiling = 23200.0f;  // -3 dBFS
         constexpr float kMaxGain     = 10.0f;     // +20 dB
         constexpr float kMinGain     = 0.25f;     // -12 dB
         // 0.25 dB/frame (12.5 dB/s) release: quiet passages after a pause recover in ~150-250 ms
+        // instead of ~400 ms, matching the reference app; still well below rates that pump.
         constexpr float kReleasePerFrame = 1.0292f; // +0.25 dB per 20 ms
 
         float sumSq = 0.0f;
@@ -1190,10 +1312,13 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
         }
         const float frameRms = (s > 0) ? std::sqrt(sumSq / static_cast<float>(s)) : 0.0f;
 
-        // Track the talker's speech level only on frames that actually carry voice. Every RX
+        // Track the talker's speech level only on frames that actually carry voice. Every RX decoder
+        // (AMBE, IMBE, Codec2, u-law) delivers unity-scale PCM, so 80 RMS is about -52 dBFS: well below
+        // any speech, above the vocoders' digital-silence floor.
         const bool speechFrame = (frameRms > 80.0f);
         if (speechFrame) {
             // Fast upward tracking (0.25) so hot talkers are caught within a syllable; 0.08 downward
+            // (~240 ms) so a quieter passage after a pause recovers in ~80 ms (was 0.06 / ~420 ms)
             // while still not chasing individual syllables (measured gain wobble +0.2 dB std).
             const float a = (frameRms > m_agcSpeechRms) ? 0.25f : 0.08f;
             m_agcSpeechRms += a * (frameRms - m_agcSpeechRms);
@@ -1236,29 +1361,39 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
 
     TranscriptionEngine *te = TranscriptionEngine::instance();
     const bool tapForStt = (te != nullptr && te->isEnabled());
+    const bool tapForReplay = QsoReplayCapture::rxTapEnabled();
     int16_t sttBuf[320];
 
-    // Tap clean post-AGC audio for transcription.
-    if (tapForStt) {
+    // 1. Tap unmodified post-AGC audio for Live Transcription and QSO Replay (100% isolated from RX Clarity & NR,
+    //    Speaker Volume & Pre-Amp). One int16 conversion feeds both; each consumer is a lock-free ring write.
+    if (tapForStt || tapForReplay) {
         for (size_t i = 0; i < s; i++) {
             const float normSample = std::clamp(m_audio_out_temp_buf[i], -32760.0f, 32760.0f);
             sttBuf[i] = static_cast<int16_t>(normSample);
         }
-        te->pushRxSamples(sttBuf, s);
+        if (tapForStt) {
+            te->pushRxSamples(sttBuf, s);
+        }
+        if (tapForReplay) {
+            QsoReplayCapture::pushSamples(sttBuf, s);
+        }
     }
 
-    // 2. Zero-Latency RX Light Audio Cleaning & Enhancement (Dynamic De-Hisser + Soft
+    // 2. Zero-Latency RX Light Audio Cleaning & Enhancement (Dynamic De-Hisser + Soft Noise Floor Expander + Light Clarity EQ)
     if (s_globalRxClean.load(std::memory_order_relaxed)) {
         m_rxEnhancer.processRxPostAgcFloatInPlace(m_audio_out_temp_buf, s);
     }
 
-    // Speaker pre-amp, 0 to +24 dB.
+    // 3. Clean Digital Speaker Pre-Amp (Cloudlifter / Focusrite style: 0 dB to +24 dB pure linear gain)
+    //    - Zero frequency filters, zero EQ, zero phase shift, 100% flat frequency response.
+    //    - Uses exact 20 ms frame lookahead so quiet/average speech gets the full linear dB boost
     //      while already-hot peaks are governed cleanly without hard square-wave clipping.
     const float preampDb = s_globalSpkPreampDb.load(std::memory_order_relaxed);
     if (preampDb <= 0.05f) {
         m_preampGain = 1.0f;
         for (size_t i = 0; i < s; i++) {
             // Soft true-peak ceiling instead of hard clipping at 32760 (hard clipping generated
+            // broadband distortion harmonics that sat 4-8 kHz in the measured output).
             pcm[i] = clampToInt16(cleanPreampCeiling(m_audio_out_temp_buf[i] * m_volume));
         }
         return;
@@ -1273,7 +1408,9 @@ void AudioEngine::process_audio(int16_t *pcm, size_t s)
     }
 
     const float frameRms = (s > 0) ? std::sqrt(sumSq / static_cast<float>(s)) : 0.0f;
-    // Allow full linear pre-amp drive across the entire 0..24 dB range (up to 48000
+    // Allow full linear pre-amp drive across the entire 0..24 dB range (up to 48000 RMS drive into the
+    // algebraic soft-knee ceiling) so every step from 0 dB -> 6 dB -> 12 dB -> 18 dB -> 24 dB produces
+    // a strong, continuous increase in speaker output without square-wave clipping.
     float desiredPreamp = targetPreampGain;
     if (frameRms > 1.0f) {
         const float maxCleanRmsDrive = std::max(1.0f, 48000.0f / frameRms);

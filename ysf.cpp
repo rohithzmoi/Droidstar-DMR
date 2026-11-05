@@ -220,7 +220,8 @@ void YSF::process_udp()
 		}
 	}
 
-	// Voice frames can arrive before the connect poll reply (reconnect while
+	// Voice frames can arrive before the connect poll reply (reconnect while the reflector still
+	// considers us linked); m_rxtimer/m_audio are only created on that reply.
 	if(p_data != nullptr && (m_modeinfo.status != CONNECTED_RW || !m_rxtimer || !m_audio)){
 		p_data = nullptr;
 	}
@@ -238,6 +239,11 @@ void YSF::process_udp()
 				m_modeinfo.stream_state = STREAM_NEW;
 				m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
 				if(!m_tx && !m_rxtimer->isActive() ){
+					m_rxcodecq.clear();
+					m_rximbecodecq.clear();
+					if(m_mbevocoder && !m_hwrx){
+						m_mbevocoder->resetRx();	// match the sender's resetTx() at key-up
+					}
 					m_audio->start_playback();
 					rxJitterReset();
 					rxImbeReset();
@@ -259,6 +265,11 @@ void YSF::process_udp()
 					m_modeinfo.stream_state = STREAM_NEW;
 					m_modeinfo.ts = QDateTime::currentMSecsSinceEpoch();
 					if(!m_tx && !m_rxtimer->isActive() ){
+						m_rxcodecq.clear();
+						m_rximbecodecq.clear();
+						if(m_mbevocoder && !m_hwrx){
+							m_mbevocoder->resetRx();	// match the sender's resetTx() at key-up
+						}
 						m_audio->start_playback();
 						rxJitterReset();
 						rxImbeReset();
@@ -272,11 +283,17 @@ void YSF::process_udp()
 				}
 			}
 		}
-		if(m_modeinfo.type == 3){
-			decode_vw(p_data);
-		}
-		else if(m_modeinfo.type != 1){
-			decode_dn(p_data);
+		// Only communication frames (FI=1) carry voice. Header and terminator frames carry CSD1/CSD2
+		// callsign data in the same payload area; decoding that as AMBE/IMBE produced 100 ms of random
+		// vocoder output at the start and end of every over and seeded the decoder's prediction
+		// history with garbage for the first real voice frames. Nothing is queued while we transmit.
+		if(m_fi == YSF_FI_COMMUNICATIONS && !m_tx){
+			if(m_modeinfo.type == 3){
+				decode_vw(p_data);
+			}
+			else if(m_modeinfo.type != 1){
+				decode_dn(p_data);
+			}
 		}
 	}
 	emit update(m_modeinfo);
@@ -683,7 +700,7 @@ void YSF::process_modem_data(QByteArray d)
 
 	char callsign[YSF_CALLSIGN_LENGTH+1];
 	::memcpy(callsign, "          ", YSF_CALLSIGN_LENGTH);
-	::memcpy(callsign, m_modeinfo.callsign.toStdString().c_str(), ::strlen(m_modeinfo.callsign.toStdString().c_str()));
+	::memcpy(callsign, m_modeinfo.callsign.toLatin1().constData(), qMin<qsizetype>(m_modeinfo.callsign.size(), 10));
 
 	d.remove(0, 4);
 
@@ -719,11 +736,11 @@ void YSF::process_modem_data(QByteArray d)
 void YSF::transmit()
 {
 	uint8_t ambe_frame[88];
-	uint8_t ambe[7];
+	uint8_t ambe[9];	// encode_2450 fills 7 bytes; keep headroom so a codec write can never touch pcm[]
 	int16_t pcm[160];
 	uint8_t s = 7;
 
-	memset(ambe, 0, 7);
+	memset(ambe, 0, sizeof(ambe));
 	if (!m_tx) {
 		send_frame();
 		return;
@@ -841,7 +858,7 @@ void YSF::encode_header(bool eot)
 {
 	uint8_t callsign[12];
 	::memcpy(callsign, "          ", 10);
-	::memcpy(callsign, m_modeinfo.callsign.toStdString().c_str(), ::strlen(m_modeinfo.callsign.toStdString().c_str()));
+	::memcpy(callsign, m_modeinfo.callsign.toLatin1().constData(), qMin<qsizetype>(m_modeinfo.callsign.size(), 10));
 
 	uint8_t *p_frame = m_ysfFrame;
 	if(m_fcs){
@@ -896,7 +913,7 @@ void YSF::encode_vw()
 {
 	uint8_t callsign[12];
 	::memcpy(callsign, "          ", 10);
-	::memcpy(callsign, m_modeinfo.callsign.toStdString().c_str(), ::strlen(m_modeinfo.callsign.toStdString().c_str()));
+	::memcpy(callsign, m_modeinfo.callsign.toLatin1().constData(), qMin<qsizetype>(m_modeinfo.callsign.size(), 10));
 	uint8_t *p_frame = m_ysfFrame;
 	if(m_fcs){
 		::memset(p_frame + 120U, 0, 10U);
@@ -1052,7 +1069,7 @@ void YSF::encode_dv2()
 {
 	uint8_t callsign[12];
 	::memcpy(callsign, "          ", 10);
-	::memcpy(callsign, m_modeinfo.callsign.toStdString().c_str(), ::strlen(m_modeinfo.callsign.toStdString().c_str()));
+	::memcpy(callsign, m_modeinfo.callsign.toLatin1().constData(), qMin<qsizetype>(m_modeinfo.callsign.size(), 10));
 	uint8_t *p_frame = m_ysfFrame;
 	if(m_fcs){
 		::memset(p_frame + 120U, 0, 10U);

@@ -470,7 +470,7 @@ QVector<QByteArray> DmrDataCodec::encodeSmsSequence(uint32_t srcId, uint32_t dst
     if (blocks > 63)
         return {};
     const int paddedDataLength = blocks * 12 - 4;
-    const int padOctets = paddedDataLength - payload.size();
+    const int padOctets = paddedDataLength - static_cast<int>(payload.size());
     payload.append(QByteArray(padOctets, '\0'));
     const uint32_t crc32 = computeDmrCrc32(
         reinterpret_cast<const uint8_t *>(payload.constData()),
@@ -987,7 +987,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
                 reinterpret_cast<const uint8_t *>(data.constData()),
                 static_cast<uint32_t>(data.size())))
             return false;
-        int textLen = data.size() - 2 - st.padOctets;
+        int textLen = static_cast<int>(data.size()) - 2 - st.padOctets;
         if (textLen <= 0)
             return false;
         const auto *raw = reinterpret_cast<const uint8_t *>(data.constData());
@@ -1014,7 +1014,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
     if (st.dpf == DPF_UNCONFIRMED_DATA || st.dpf == DPF_CONFIRMED_DATA) {
         if (!hasCrc)
             return false;
-        int pduLen = data.size() - 4 - st.padOctets;
+        int pduLen = static_cast<int>(data.size()) - 4 - st.padOctets;
         if (pduLen < 0)
             return false;
         data.truncate(pduLen);
@@ -1041,7 +1041,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
             }
             if (offset >= data.size())
                 return false;
-            const int len = data.size() - offset;
+            const int len = static_cast<int>(data.size()) - offset;
             if (srcPort == 5016U || dstPort == 5016U) {
                 int textOffset = offset;
                 if (data.size() >= offset + 4 &&
@@ -1049,8 +1049,8 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
                     p[offset + 2] == 0x00U && p[offset + 3] == 0x0AU) {
                     textOffset += 4;
                 }
-                const bool little = likelyLittleEndianUtf16(p + textOffset, data.size() - textOffset);
-                out.text = decodeUtf16(p + textOffset, data.size() - textOffset, little);
+                const bool little = likelyLittleEndianUtf16(p + textOffset, static_cast<int>(data.size()) - textOffset);
+                out.text = decodeUtf16(p + textOffset, static_cast<int>(data.size()) - textOffset, little);
                 out.formatName = QStringLiteral("ETSI Compressed");
             } else if (srcPort >= 0x00C0U || dstPort >= 0x00C0U || srcPort == 98U || dstPort == 98U) {
                 // Manufacturer-specific compressed port (Motorola TMS).
@@ -1076,8 +1076,8 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
                         break;
                     }
                 }
-                const bool little = likelyLittleEndianUtf16(p + textOffset, data.size() - textOffset);
-                out.text = decodeUtf16(p + textOffset, data.size() - textOffset, little);
+                const bool little = likelyLittleEndianUtf16(p + textOffset, static_cast<int>(data.size()) - textOffset);
+                out.text = decodeUtf16(p + textOffset, static_cast<int>(data.size()) - textOffset, little);
                 out.formatName = QStringLiteral("M-SMS Compressed");
             }
         } else {
@@ -1107,7 +1107,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
                     return false;
                 const uint16_t tmsLen = static_cast<uint16_t>((p[appOffset] << 8U) | p[appOffset + 1]);
                 int textOffset = appOffset + 9;
-                for (int i = appOffset + 4; i + 2 < std::min<int>(data.size(), appOffset + 12); ++i) {
+                for (int i = appOffset + 4; i + 2 < std::min<int>(static_cast<int>(data.size()), appOffset + 12); ++i) {
                     if (p[i] == 0x0DU && p[i + 1] == 0x00U && p[i + 2] == 0x0AU) {
                         textOffset = i + 3;
                         break;
@@ -1120,7 +1120,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
                 }
                 const int endOffset = (tmsLen >= 7U && appOffset + 2 + static_cast<int>(tmsLen) <= data.size())
                                       ? (appOffset + 2 + static_cast<int>(tmsLen))
-                                      : data.size();
+                                      : static_cast<int>(data.size());
                 if (endOffset <= textOffset)
                     return false;
                 const int textLen = endOffset - textOffset;
@@ -1136,7 +1136,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
                 const uint16_t udpLen = static_cast<uint16_t>((p[ipHeaderLen + 4] << 8U) | p[ipHeaderLen + 5]);
                 const int endOffset = (udpLen >= 12U && ipHeaderLen + static_cast<int>(udpLen) <= data.size())
                                       ? (ipHeaderLen + static_cast<int>(udpLen))
-                                      : data.size();
+                                      : static_cast<int>(data.size());
                 if (endOffset <= textOffset)
                     return false;
                 const int textLen = endOffset - textOffset;
@@ -1149,7 +1149,7 @@ bool DmrSmsAssembler::finalizeMessage(const AssemblyState &st,
             }
         }
     } else if (st.dpf == DPF_DEFINED_SHORT || st.dpf == DPF_DEFINED_RAW) {
-        int len = data.size() - st.padOctets;
+        int len = static_cast<int>(data.size()) - st.padOctets;
         if (hasCrc && len > 4)
             len -= 4;
         if (len <= 0)

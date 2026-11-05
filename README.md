@@ -1,6 +1,6 @@
 # Modified DroidStar DMR App for iOS & Android
 
-**Version 0.45.06**
+**Version 0.45.07**
 
 A free, open-source digital ham radio app for iPhone and iPad. DMR on BrandMeister, YSF, M17, P25, NXDN, D-STAR, and AllStar, from the phone in your pocket. Built and shared by VU3LVO.
 
@@ -20,37 +20,99 @@ It is licensed under the GPL, it has no ads, and it does not ask you to subscrib
 
 This project uses Qt 6.
 
-## What's new in 0.45.06
+## What's new in 0.45.07
 
-This one is about **DMR text messaging**, and clearer D-STAR voice.
+This one is about **hearing it again, keying up with a real button, and getting connected without guesswork**.
 
-### DMR Text Messaging (SMS / TMS)
+### QSO Replay
 
-The headline feature. Send and receive short messages through BrandMeister to physical handhelds and mobiles, and get replies back on the phone. Works on BrandMeister ODTP and on HomeBrew.
+Missed what someone said? Replay it.
 
-- Private and Talk Group messaging, with delivery status, acknowledgements, retry, and send/reply timing you can actually trust.
-- Four radio formats: Motorola TMS, DMR Standard (AnyTone), ETSI Standard, and Defined Short Data (Hytera / Chinese radios).
-- **SMS Standby** — stay connected for messaging without linking a voice Talk Group. Voice stays quiet until you pick a TG again. Choose the messaging host inside Messages.
-- Quick services from the phone: Echo (ECHO), Weather (WX), My GPS (GPS), Callsign SMS (SMSC), APRS gateway, Cell SMS (SMSGTE), DAPNET Pager, and Repeater info (RPT).
-- Faster Replies: `CONFIG DELAY 1` cuts BrandMeister's service wait from 2.5 s to 1 s. Undo with `CONFIG DELAY 3`.
-- Shortcuts from Last Heard, the station you are hearing now, and QSO log rows open the conversation in one tap.
-- Threaded chat with All / Unread / Private / Groups / Services filters, unread badges, search by callsign or DMR ID, swipe to reply or manage a thread, and history that survives a restart.
+- Every over you hear is saved and attached to its entry in the QSO log. Tap **Replay** on any contact to listen again.
+- Replay is on Home, in Simple mode, and in the QSO log.
+- If a new station comes on air or you key up, the replay pauses on its own, so it never talks over live audio.
+- Your own transmissions can be kept too. Turn off "Exclude my own transmissions" to include them.
+- You choose how much space it uses: 50, 100, 250 or 500 MB, or a custom size. Each option shows roughly how many hours it holds. The oldest clips are removed first.
+- Private by design: replays stay on your device, are not included in backups, and can't be exported or shared.
+- On by default. Turn it off any time in Settings > QSO Replay.
 
-Messaging needs a BrandMeister or HomeBrew DMR link and a valid DMR ID. Network rules for SMS services still apply.
+### Hardware PTT buttons
 
-### Clearer D-STAR (and shared RX polish)
+Use a physical button to transmit.
 
-D-STAR AMBE receive and transmit were reworked to sit closer to DVSI AMBE-3000 behaviour: better lost-frame handling on REF / XRF / DCS, less hiss on unvoiced speech, and levels that no longer jump on the first word after a pause. The shared synthesis work also helps DMR, YSF, and NXDN receive.
+- **Bluetooth PTT buttons:** add one in Settings > PTT Button. Press the button once and DroidStar learns it.
+- **Earbud and headset buttons** work as PTT.
+- **Keyboard-style buttons** (the ones that act like a Bluetooth keyboard) can be learned too.
+- **Car steering wheel buttons:** next and previous track can work as PTT. This is optional.
+- **Action Button, Siri and Shortcuts** can key the radio.
+- Works with the screen off.
+- If a button only sends a single click, DroidStar switches to Toggle TX for you, with a one-tap Revert.
+- Earbuds that send play or pause by themselves when you put them in no longer trigger TX.
 
-Layouts on iPhone and iPad got another pass so text and rows stop hiding under the notch or home indicator. Audio session reactivation after a phone call or Siri no longer freezes the UI for a beat.
+### Connection check for BrandMeister and TGIF
 
-The longer write-up is on the [changelog](https://www.vu3lvo.com/droidstar/changelog).
+- A new **Verify** button in Settings checks your BrandMeister and TGIF hotspot passwords against the server.
+- It also runs on its own when you finish typing a password or your DMR ID.
+- Green ticks mean you're good to go.
+- If a password is wrong, a short guide explains:
+  - use the **Hotspot password**, not your website login password
+  - where to set it, with one-tap links to BM SelfCare and TGIF User Security
+  - that a simple 6 to 8 character password with no special characters works best
+- The same guide pops up if a connection is rejected on the Home screen. Simple mode shows a **Troubleshoot login** button.
+
+### Automatic troubleshooting
+
+- If a connection hangs while IPv6 is on, DroidStar turns IPv6 off and reconnects for you. A short message tells you what happened, and the IPv6 switch in Settings updates to match.
+
+### Simple mode
+
+A clean, easy Home screen for everyday use. Switch between **Simple** and **Advanced** at the top of Home.
+
+- One big **Push to talk** button. Hold to talk, or tap to start and stop if you use Toggle TX.
+- Pick your mode, server, talkgroup or module in a couple of taps.
+- Your favourite and recent talkgroups appear as quick chips.
+- A **Now hearing** card shows who is talking.
+- **Recently heard** lists recent stations, with Replay on each one.
+- Volume control, private calls and DTMF for AllStarLink.
+- New users are guided to set up their callsign and DMR ID.
+- Need more controls? Switch back to Advanced anytime.
+
+### On-air glow
+
+- While you transmit, a red light runs around the edge of the screen, so you always know you're on air. It shows on every screen.
+
+### Improved
+
+- **YSF audio:** fixed robotic, muffled and noisy transmit and receive audio on YSF.
+- **Cleaner receive audio on all modes:** NXDN, P25 and D-STAR no longer play short bursts of noise at the start or end of an over. Audio from the previous over no longer bleeds into the next one.
+- **Bluetooth earphones:** transmit and receive switch to your earphones automatically again, and the mic and speaker stay on the same device.
+- **Transmit safety:** you can only key up once the connection is fully ready.
+- **Talkgroup switching** is more reliable.
+- **Smoother app:** lists, level meters and live transcription use less work and feel snappier. Long transcripts no longer slow the app down.
+- **Live transcription** picks a model that fits your device's memory and never loads two models at once.
+- **Settings switches** always reflect the current setting, even when the app changes it for you.
+
+### Fixed
+
+- Several rare crashes when connecting, disconnecting or transmitting on M17, YSF, D-STAR, DCS and AllStarLink.
+- Audio could stop for good after a phone call or another app interrupted it. It now recovers on its own.
+- A hang on start-up when an old hardware vocoder setting was saved.
+- Long callsigns could cause problems on DCS and M17.
+- A queue of background data that could slowly build up on idle D-STAR (REF) connections.
+
+### Note
+
+- DroidStar is no longer offered on Mac through "Designed for iPad". iPhone and iPad are fully supported.
+
+The longer write-up, and the 0.45.06 notes (DMR text messaging and clearer D-STAR), are on the [changelog](https://www.vu3lvo.com/droidstar/changelog).
 
 ## What you get in the current iOS app
 
 Some of this landed over the last few releases. Some of it has been in the app since the first public builds. I am putting it in one place so you do not have to reconstruct the history from old posts.
 
-- **DMR Text Messaging.** See above. This is the big one in 0.45.06.
+- **QSO Replay, hardware PTT buttons, Simple mode, and a login check.** See above. These are the big ones in 0.45.07.
+
+- **DMR Text Messaging.** Private and Talk Group messages to real handhelds through BrandMeister, with delivery status, four radio formats, and quick services like Echo and Weather. New in 0.45.06.
 
 - **BrandMeister ODTP.** Open DMR Terminal Protocol, on UDP port 54006, for BrandMeister hosts. Talk Groups change without the old key-up dance. If ODTP is not available, the app falls back to the usual HomeBrew protocol, so you are not stuck staring at a dead link. There is a switch in Settings if you want it off.
 
@@ -90,7 +152,7 @@ Android builds from 2024 are no longer something I am shipping or fixing. See th
 
 ## Feedback and support
 
-Please try messaging a radio you trust, and tell me how 0.45.06 feels. Echo on the Messages services list is the quickest smoke test; a parrot on TG 9990 is still the right check for voice. If delivery status lies, if a format fails on your handheld, or if D-STAR still sounds wrong on a particular reflector, I want that report.
+Please tell me how 0.45.07 feels. If a PTT button, earbud, or steering wheel button does not learn or key up, tell me the make and model. If Replay misses an over, or the Verify check says a good password is wrong, I want that report. A parrot on TG 9990 is still the right check for voice.
 
 Ideas are welcome too. ODTP got built because a tester asked for it and then explained why. That is usually how the good ones start.
 
@@ -108,7 +170,7 @@ Thank you also to BD4VHI, who translated a build into Chinese back in September 
 
 This project, including the modifications, is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
 
-Your logs, settings, favourite Talk Groups, net reminders, transcripts, and message history stay on the phone. There is no account and no analytics in the app. The networks you connect to still see your callsign and your DMR ID, the same way they would from a radio. The website does not use cookies or analytics either. The longer version is at [vu3lvo.com/droidstar/privacy](https://vu3lvo.com/droidstar/privacy).
+Your logs, settings, favourite Talk Groups, net reminders, transcripts, message history, and QSO replays stay on the phone. There is no account and no analytics in the app. The networks you connect to still see your callsign and your DMR ID, the same way they would from a radio. The website does not use cookies or analytics either. The longer version is at [vu3lvo.com/droidstar/privacy](https://vu3lvo.com/droidstar/privacy).
 
 ## Support
 

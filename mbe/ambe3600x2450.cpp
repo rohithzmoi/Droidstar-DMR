@@ -112,7 +112,7 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   // copy repeat from prev_mp
   cur_mp->repeat = prev_mp->repeat;
 
-  // TIA-102.BABA-1 §7: a frame whose first six bits of u0 (ambe_d[0..5])
+  // TIA-102.BABA-1 §7: a frame whose first six bits of u0 (ambe_d[0..5]) equal 63 is a tone frame
   int u0_top6 = (ambe_d[0]<<5) | (ambe_d[1]<<4) | (ambe_d[2]<<3) | (ambe_d[3]<<2) | (ambe_d[4]<<1) | ambe_d[5];
   if (u0_top6 == 0x3F)
     {
@@ -140,7 +140,8 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
 #ifdef AMBE_DEBUG
       printf ("Silence Frame\n");
 #endif
-      // TIA-102.BABA-1 §4.1 & §4.3: silence frames use w0 = 2*pi/32, L = 14, all
+      // TIA-102.BABA-1 §4.1 & §4.3: silence frames use w0 = 2*pi/32, L = 14, all bands unvoiced,
+      // and are NEVER used for prediction (prev_mp keeps the last voice frame's gamma and log2Ml).
       cur_mp->w0 = ((float) 2 * (float) M_PI) / (float) 32;
       cur_mp->L = 14;
       for (l = 0; l <= 56; l++)
@@ -322,7 +323,9 @@ mbe_decodeAmbe2450Parms (char *ambe_d, mbe_parms * cur_mp, mbe_parms * prev_mp)
   printf ("b5: %i b6: %i b7: %i b8: %i\n", b5, b6, b7, b8);
 #endif
 
-  // Load Ci,k with the values from the HOC tables there appear to be a
+  // Load Ci,k with the values from the HOC tables
+  // there appear to be a couple typos in eq. 37 so we will just do what makes sense
+  // (3 <= k <= Ji and k<=6)
   for (k = 3; k <= Ji[1]; k++)
     {
       if (k > 6)
@@ -532,7 +535,7 @@ mbe_processAmbe2450Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
   const int c0_uncorrectable = (cur_mp->errorCount4 != 0);
   cur_mp->errorCount4 = 0;
 
-  for (i = 0; i < *errs2; i++)
+  for (i = 0; i < *errs2 && i < 60; i++)
     {
       *err_str = '=';
       err_str++;
@@ -540,7 +543,7 @@ mbe_processAmbe2450Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
 
   const float err_rate = (0.95f * prev_mp->errorRate) + (0.001064f * (float) (*errs2));
 
-  // TIA-102.BABA-1 §5.6: repeat criteria (C0 errors >= 4, or erasure frame)
+  // TIA-102.BABA-1 §5.6: repeat criteria (C0 errors >= 4, or erasure frame) apply before classification
   if (c0_uncorrectable)
     {
       bad = 2;
@@ -604,7 +607,8 @@ mbe_processAmbe2450Dataf (float *aout_buf, int *errs2, char *err_str, char ambe_
 
   if (bad == 4)
     {
-      // Silence frame (b0 124/125, §4.1 & §4.3): synthesized so any voiced
+      // Silence frame (b0 124/125, §4.1 & §4.3): synthesized so any voiced tail in
+      // prev_mp_enhanced windows out smoothly, but NEVER copied into prev_mp!
       cur_mp->repeat = 0;
       prev_mp->repeat = 0;
       prev_mp->errorCountTotal = *errs2;

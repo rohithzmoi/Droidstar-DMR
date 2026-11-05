@@ -61,7 +61,7 @@ public:
             return;
         }
         // IDs radioid.net does not know (hotspot/ESSID numbers, service IDs) would otherwise be
-        // re-queried on every new RX turn; remember misses for this session
+        // re-queried on every new RX turn; remember misses for this session (same outcome: no emit).
         if (m_unknownIds.contains(data1)) {
             return;
         }
@@ -128,7 +128,7 @@ private slots:
 
         QJsonObject jsonObject = json.object();
 
-        // radioid.net response (as per your logs) uses "rows": [ { "name"
+        // radioid.net response (as per your logs) uses "rows": [ { "name": "...", "country": "..." } ]
         // We'll also support older/alternate formats safely.
         QJsonArray list = jsonObject.value("rows").toArray();
         if (list.isEmpty()) {

@@ -113,7 +113,7 @@ public:
         bool mode;
         bool sw_vocoder_loaded;
         bool hw_vocoder_loaded;
-    } m_modeinfo;
+    } m_modeinfo{};
     enum{
         DISCONNECTED,
         TIMEOUT,
@@ -211,11 +211,14 @@ protected:
     QQueue<uint8_t> m_rxmodemq;
 
     // RX jitter buffer: prime 3 frames (60 ms) before the first dequeue, then conceal
+    // (vocoder lost-frame repeat) for up to 5 consecutive late frames instead of going silent.
     bool m_rxJitterPrimed = false;
     int m_rxJitterPrimeTicks = 0;
     int m_rxConcealRun = 0;
     void rxJitterReset() { m_rxJitterPrimed = false; m_rxJitterPrimeTicks = 0; m_rxConcealRun = 0; }
-    // True when a frame can be taken; false while priming. allowTickPrime=false
+    // Returns true when a codec frame may be consumed now; false while prebuffering.
+    // allowTickPrime=false primes only on queue depth (used where the queue may legitimately
+    // stay empty for a whole stream, e.g. YSF wide mode carrying IMBE instead of AMBE).
     bool rxJitterReady(int frameBytes, bool allowTickPrime = true)
     {
         if (!m_rxJitterPrimed) {
@@ -227,7 +230,7 @@ protected:
         }
         return m_rxcodecq.size() >= frameBytes;
     }
-    // True when the stream is live but no frame arrived in
+    // True when the stream is live but no frame arrived in time: caller should conceal one frame.
     bool rxShouldConceal()
     {
         if (!m_rxJitterPrimed || m_modeinfo.stream_state != STREAMING) return false;

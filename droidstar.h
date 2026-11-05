@@ -27,6 +27,8 @@
 #include "mode.h"
 #include "audioengine.h"  // Make sure AudioEngine is included
 
+class QUdpSocket;
+
 class DroidStar : public QObject
 {
     Q_OBJECT
@@ -120,6 +122,8 @@ signals:
     void dmr_sms_received(uint32_t srcId, uint32_t dstId, const QString &text, bool isGroup, const QString &format);
     void dmr_sms_send_status(int msgId, int status, const QString &detail);
     void dmr_sms_ack_received(uint32_t srcId, bool success);
+    // result: ok | default (TGIF security off) | rejected | unreachable | missing
+    void dmr_auth_result(const QString &network, const QString &result);
 public slots:
     void handle_background_state();
     void handle_foreground_state();
@@ -139,6 +143,9 @@ public slots:
     Q_INVOKABLE void tune_to_talkgroup(const QString &tgid, bool isPrivate = false);
     Q_INVOKABLE void trigger_auto_tx_punch(int delayMs = 220);
     Q_INVOKABLE void cancel_tune_reconnect();
+    Q_INVOKABLE void verify_dmr_auth(const QString &network);  // "BM" | "TGIF"
+    // "BM"/"TGIF" when the last connect failed on password/login, else ""
+    Q_INVOKABLE QString get_auth_failed_network() const { return m_dmrAuthFailed ? m_dmrAuthNet : QString(); }
     Q_INVOKABLE bool is_tuning_reconnect() const;
     Q_INVOKABLE bool is_auto_tx_punch_pending() const;
     Q_INVOKABLE bool is_odtp_active() const { return m_odtpActive; }
@@ -448,6 +455,9 @@ private:
     QSettings *m_settings;
     QStringList recentTGIDs;
     QString config_path;
+    QHash<QString, QPointer<QUdpSocket>> m_authProbes;
+    QString m_dmrAuthNet;
+    bool m_dmrAuthFailed = false;
     QString hosts_filename;
     QString m_callsign;
     QString m_host;
@@ -484,6 +494,14 @@ private:
     uint32_t m_dmr_destid;
     QMap<uint32_t, QString> m_dmrids;
     QHash<QString, uint32_t> m_callsignToDmrId;
+    // DMRIDs.dat is parsed on the thread pool (260k lines); results are swapped in on the GUI thread.
+    bool m_dmrIdsParseRunning = false;
+    bool m_dmrIdsParsePending = false;
+    // Protocol of the Mode that is actually running (m_protocol is the UI selection and can change first).
+    QString m_activeProtocol;
+    // update_data() runs per voice packet: cache the device-status strings instead of re-splitting.
+    QString m_cachedAmbeProdId, m_cachedAmbeVerStr, m_cachedMmdvmStr, m_cachedAmbeStatus, m_cachedMmdvmStatus;
+    int m_hoselineLiveTicks = 0;
     QMap<uint16_t, QString> m_nxdnids;
     char m_module;
     int m_port;

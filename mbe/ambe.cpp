@@ -230,7 +230,9 @@ mbe_dequantizeAmbeParms (mbe_parms * cur_mp, mbe_parms * prev_mp, const int *b, 
   fprintf (stderr, "b5: %i b6: %i b7: %i b8: %i\n", b5, b6, b7, b8);
 #endif
 
-  // Load Ci,k with the values from the HOC tables there appear to be a
+  // Load Ci,k with the values from the HOC tables
+  // there appear to be a couple typos in eq. 37 so we will just do what makes sense
+  // (3 <= k <= Ji and k<=6)
   for (k = 3; k <= Ji[1]; k++)
     {
       if (k > 6)
@@ -567,7 +569,10 @@ void encode_ambe(const IMBE_PARAM *imbe_param, int b[], mbe_parms*cur_mp, mbe_pa
 
 	const float f0_quant = dstar ? make_f0(b[0]) : mbe_ambe2450_f0(b[0]);
 
-	// Low-pitch (< 95 Hz) background hum unvoicing guard (mbelib-neo #149): At
+	// Low-pitch (< 95 Hz) background hum unvoicing guard (mbelib-neo #149):
+	// At pitches below ~95 Hz, 60 Hz hum or low-level room noise can falsely pass
+	// the IMBE voicing test in the lowest 500 Hz column. When pitch < 95 Hz and
+	// frame spectral amplitude is low, mark weak sub-500 Hz harmonics unvoiced.
 	if (f0_quant * 8000.0f < 95.0f && max_sa < 18.0f) {
 		for (int l = 1; l <= L; l++) {
 			if ((float)l * f0_quant * 8000.0f <= 500.0f && sa_w[l - 1] < 8.0f) {
@@ -1342,9 +1347,11 @@ mbe_synthesizeUnvoicedFFT (float aout_buf[160], mbe_parms * cur_mp, const mbe_pa
     shaped_re[i] *= (1.0f / 256.0f);
   }
 
-  // Algorithm #126: Weighted Overlap-Add (WOLA) Only read the buffers where the
+  // Algorithm #126: Weighted Overlap-Add (WOLA)
+  // Only read the buffers where the corresponding window is non-zero: for n < 56 the current-frame
   // index (128 + n - 160) is negative and for n > 127 the previous-frame index (128 + n) is past the
-  // end of previousUw. Those terms carry zero weight, but reading them pulled in adjacent
+  // end of previousUw. Those terms carry zero weight, but reading them pulled in adjacent stack/heap
+  // garbage, and a NaN bit-pattern there (NaN * 0 == NaN) saturated the whole output frame.
   for (int n = 0; n < 160; ++n) {
     const float w_prev = mbe_unvoiced_synth_window (n);
     const float w_curr = mbe_unvoiced_synth_window (n - 160);
@@ -1430,6 +1437,7 @@ mbe_synthesizeSpeechWithRm0f (float *aout_buf, mbe_parms * cur_mp, mbe_parms * p
   }
 
   // Temporarily apply DVSI 100 Hz output high-pass magnitude/phase and voiced/unvoiced
+  // render gains (+0.45 dB voiced / -0.4 dB unvoiced), restoring model state after synthesis
   float cur_saved_Ml[57], cur_saved_PHIl[57];
   float prev_saved_Ml[57], prev_saved_PHIl[57];
   const int shared_model = (prev_mp == cur_mp);
@@ -1462,7 +1470,9 @@ mbe_synthesizeSpeechWithRm0f (float *aout_buf, mbe_parms * cur_mp, mbe_parms * p
     }
   }
 
-  // Synthesize voiced harmonics (DVSI AMBE-3000 fourth-root amplitude interpolation and
+  // Synthesize voiced harmonics (DVSI AMBE-3000 fourth-root amplitude interpolation
+  // and quadratic phase interpolation on all steady-pitch harmonics; 2-multiply
+  // oscillator recurrence with Ws[] windowing on transitions)
   for (int l = 1; l <= maxl; ++l) {
     const float cw0l = cw0 * (float) l;
     const float pw0l = pw0 * (float) l;

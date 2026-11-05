@@ -83,6 +83,7 @@ private:
 	uint8_t m_oseq;
 	QQueue<int16_t> m_audioq;
 	bool m_rxAudioPrimed = false; // 60 ms prefill before playout, re-armed after an underrun
+	int m_rxEmptyTicks = 0;   // consecutive empty 20 ms ticks before the cushion is rebuilt
 	uint32_t m_rxjitter;
 	uint32_t m_rxloss;
 	uint32_t m_rxframes;
